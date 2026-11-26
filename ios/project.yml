@@ -5,14 +5,16 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.5.7"
-    CURRENT_PROJECT_VERSION: "58"
+    MARKETING_VERSION: "0.5.8"
+    CURRENT_PROJECT_VERSION: "59"
 targets:
   Hatoriel:
     type: application
     platform: iOS
     sources:
       - Hatoriel
+      - path: build/CrimsonAssets.xcassets
+        buildPhase: resources
       - path: build/llama-LICENSE.txt
         buildPhase: resources
     dependencies:
@@ -24,6 +26,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hatoriel.app
         GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Hatoriel
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         SWIFT_OBJC_BRIDGING_HEADER: Hatoriel/Hatoriel-Bridging-Header.h
