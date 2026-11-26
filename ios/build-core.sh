@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p build/headers build/simulator
-cp Hatoriel/Hatoriel-Bridging-Header.h build/headers/HatorielCore.h
+sed '/#include "Hatoriel-Local-Header.h"/d' Hatoriel/Hatoriel-Bridging-Header.h > build/headers/HatorielCore.h
 export IPHONEOS_DEPLOYMENT_TARGET=16.0
 export CARGO_TARGET_DIR="$PWD/build/rust-target"
 for target in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
