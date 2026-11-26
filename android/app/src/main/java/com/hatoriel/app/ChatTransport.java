@@ -63,5 +63,5 @@ final class ChatTransport {
         } finally {c.disconnect();connection=null;}
     }
     boolean isCancelled(){return cancelled;}
-    void cancel(){cancelled=true;HttpURLConnection c=connection;if(c!=null)c.disconnect();}
+    void cancel(){if(cancelled)return;cancelled=true;HttpURLConnection c=connection;if(c!=null)new Thread(c::disconnect,"hatoriel-cancel").start();}
 }
