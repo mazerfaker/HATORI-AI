@@ -1,0 +1,31 @@
+name: Hatoriel
+options:
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.5.0"
+    CURRENT_PROJECT_VERSION: "50"
+targets:
+  Hatoriel:
+    type: application
+    platform: iOS
+    sources:
+      - Hatoriel
+    dependencies:
+      - framework: build/HatorielCore.xcframework
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hatoriel.app
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Hatoriel
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        SWIFT_OBJC_BRIDGING_HEADER: Hatoriel/Hatoriel-Bridging-Header.h
+        OTHER_LDFLAGS: ["$(inherited)", "-lresolv", "-liconv", "-framework", "Security", "-framework", "SystemConfiguration"]
+schemes:
+  Hatoriel:
+    build:
+      targets:
+        Hatoriel: all
