@@ -7,18 +7,20 @@ private let surface = Color(red: 43/255, green: 43/255, blue: 46/255)
 private let crimson = Color(red: 238/255, green: 52/255, blue: 52/255)
 
 struct CrimsonReticle: View {
-    var busy = false
+    var state: CrimsonState = .idle
+    var motion = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
-        TimelineView(.animation(minimumInterval: busy ? 1.0/30.0 : 1.0/15.0, paused: reduceMotion || scenePhase != .active)) { timeline in
+        TimelineView(.animation(minimumInterval: state.animated ? 1.0/30.0 : 1.0/15.0, paused: !motion || reduceMotion || scenePhase != .active)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
-            let pulse = reduceMotion ? 1.0 : 1.0 + sin(time * (busy ? 4 : 1.8)) * 0.035
+            let still = reduceMotion || !motion || scenePhase != .active
+            let pulse = still ? 1.0 : 1.0 + sin(time * (state == .responding ? 5 : state == .thinking ? 3 : 1.8)) * (state == .responding ? 0.075 : 0.035)
             Canvas { context, size in
                 let center = CGPoint(x: size.width/2, y: size.height/2)
                 let r = min(size.width, size.height) * 0.27 * CGFloat(pulse)
                 let circle = Path(ellipseIn: CGRect(x: center.x-r, y: center.y-r, width: 2*r, height: 2*r))
-                context.stroke(circle, with: .color(crimson.opacity(0.1)), lineWidth: 8)
+                context.stroke(circle, with: .color(crimson.opacity(state == .completed ? 0.24 : 0.10)), lineWidth: state == .completed ? 10 : 8)
                 context.stroke(circle, with: .color(crimson), lineWidth: 2)
                 for i in 0..<4 {
                     let a = CGFloat(i) * .pi/2
@@ -27,13 +29,23 @@ struct CrimsonReticle: View {
                     line.addLine(to: CGPoint(x: center.x+cos(a)*r*1.42, y: center.y+sin(a)*r*1.42))
                     context.stroke(line, with: .color(crimson), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 }
-                if busy {
+                if state == .thinking {
                     for i in 0..<3 {
-                        let start = reduceMotion ? Double(i)*120 : time*85 + Double(i)*120
+                        let start = still ? Double(i)*120 : time*85 + Double(i)*120
                         var arc = Path()
                         arc.addArc(center: center, radius: r*1.65, startAngle: .degrees(start), endAngle: .degrees(start+60), clockwise: false)
                         context.stroke(arc, with: .color(crimson.opacity(0.75)), lineWidth: 1.5)
                     }
+                }
+                if state == .responding {
+                    let wave = r * (still ? 1.5 : 1.35 + 0.16 * CGFloat(sin(time * 5)))
+                    context.stroke(Path(ellipseIn: CGRect(x: center.x-wave, y: center.y-wave, width: 2*wave, height: 2*wave)), with: .color(crimson.opacity(0.4)), lineWidth: 1.5)
+                }
+                if state == .failed || state == .cancelled {
+                    var mark = Path()
+                    mark.move(to: CGPoint(x: center.x-r*0.4,y: center.y+r*1.7))
+                    mark.addLine(to: CGPoint(x: center.x+r*0.4,y: center.y+r*1.7))
+                    context.stroke(mark, with: .color(crimson), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 }
                 context.fill(Path(ellipseIn: CGRect(x: center.x-2, y: center.y-2, width: 4, height: 4)), with: .color(crimson))
             }
@@ -48,6 +60,11 @@ struct FoundationView: View {
     @StateObject private var reminders = ReminderStore()
     @Environment(\.scenePhase) private var scenePhase
     @State private var input = ""
+    @AppStorage("crimson.haptics") private var haptics = true
+    @AppStorage("crimson.motion") private var motion = true
+    @State private var followLatest = true
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var settings = false
     @State private var endpoint = ""
     @State private var desktop = false
@@ -70,10 +87,10 @@ struct FoundationView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                CrimsonReticle(busy: chat.busy).frame(width: 44, height: 44)
+                CrimsonReticle(state: chat.feedbackState, motion: motion).frame(width: 44, height: 44)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("H A T O R I E L").font(.headline)
-                    Text(chat.localMode ? "CRIMSON CORE · LOCAL" : chat.desktopMode ? "CRIMSON CORE · PC" : "CRIMSON CORE").font(.caption2).foregroundStyle(crimson)
+                    Text("HATORIEL").font(.headline).tracking(2).lineLimit(1).minimumScaleFactor(0.7)
+                    Text(chat.localMode ? "CRIMSON CORE · LOCAL" : chat.desktopMode ? "CRIMSON CORE · PC" : "CRIMSON CORE").font(.caption2).foregroundStyle(crimson).lineLimit(1).minimumScaleFactor(0.7)
                 }
                 Spacer()
                 Button {
@@ -87,7 +104,7 @@ struct FoundationView: View {
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         if chat.history.isEmpty {
-                            CrimsonReticle().frame(width: 148, height: 148).padding(.top, 24)
+                            CrimsonReticle(state: chat.feedbackState, motion: motion).frame(width: 148, height: 148).padding(.top, 24)
                             Text("Готова до діалогу").font(.title2.bold())
                             Text("Чим можу допомогти?").foregroundStyle(.secondary)
                         }
@@ -96,13 +113,25 @@ struct FoundationView: View {
                         }
                         if chat.busy { bubble(role: "assistant", text: chat.partial.isEmpty ? "Думаю…" : chat.partial) }
                         Color.clear.frame(height: 1).id("end")
-                    }.padding(16)
+                    }.padding(16).frame(maxWidth: 780).frame(maxWidth: .infinity)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .onAppear { proxy.scrollTo("end", anchor: .bottom) }
-                .onChange(of: chat.history.count) { _ in proxy.scrollTo("end", anchor: .bottom) }
-                .onChange(of: chat.partial) { _ in proxy.scrollTo("end", anchor: .bottom) }
-                .onChange(of: chat.busy) { _ in proxy.scrollTo("end", anchor: .bottom) }
+                .onChange(of: chat.history.count) { _ in if followLatest { proxy.scrollTo("end", anchor: .bottom) } }
+                .onChange(of: chat.partial) { _ in if followLatest { proxy.scrollTo("end", anchor: .bottom) } }
+                .onChange(of: chat.busy) { _ in if followLatest { proxy.scrollTo("end", anchor: .bottom) } }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    HStack {
+                        Spacer()
+                        Button {
+                            followLatest.toggle()
+                            if followLatest { proxy.scrollTo("end", anchor: .bottom) }
+                        } label: {
+                            Label(followLatest ? "Стежити за відповіддю" : "До останнього", systemImage: followLatest ? "arrow.down.circle.fill" : "arrow.down.circle")
+                                .font(.caption).padding(8)
+                        }.accessibilityAddTraits(followLatest ? .isSelected : [])
+                    }.padding(.horizontal, 12)
+                }
             }
             Divider()
             if let item = chat.suggestion, !chat.busy {
@@ -121,7 +150,7 @@ struct FoundationView: View {
             }
             VStack(spacing: 8) {
                 HStack {
-                    Text(chat.status).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    VStack(alignment: .leading, spacing: 3) { Text(chat.feedbackState.label).font(.caption.bold()).foregroundStyle(crimson); Text(chat.status).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
                     Spacer()
                     if !chat.busy && !chat.history.isEmpty {
                         Button { confirmRetry = true } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44) }
@@ -134,7 +163,7 @@ struct FoundationView: View {
                         .background(surface, in: RoundedRectangle(cornerRadius: 12))
                     Button {
                         if chat.busy { chat.cancel() }
-                        else if chat.send(input) { input = ""; focused = false }
+                        else if chat.send(input) { CrimsonFeedback.send(enabled: haptics); input = ""; focused = false; followLatest = true }
                     } label: {
                         Image(systemName: chat.busy ? "stop.fill" : "arrow.up")
                             .font(.headline).frame(width: 46, height: 46)
@@ -142,9 +171,10 @@ struct FoundationView: View {
                     }.accessibilityLabel(chat.busy ? "Зупинити" : "Надіслати")
                      .disabled(chat.importing || (!chat.busy && input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }
-            }.padding(12)
+            }.padding(12).frame(maxWidth: 780).frame(maxWidth: .infinity)
         }.background(graphite.ignoresSafeArea()).foregroundStyle(.white).tint(crimson)
         .sheet(isPresented: $settings, onDismiss: { sessionKey = "" }) { settingsView }
+        .onChange(of: chat.feedbackRevision) { _ in if scenePhase == .active { CrimsonFeedback.finish(chat.feedbackState, enabled: haptics) } }
         .alert("Повторити останній запит?", isPresented: $confirmRetry) {
             Button("Скасувати", role: .cancel) {}
             Button("Повторити") { chat.retry() }
@@ -161,7 +191,7 @@ struct FoundationView: View {
                 Spacer()
                 Button {
                     UIPasteboard.general.string = text
-                } label: { Image(systemName: "doc.on.doc").font(.caption).frame(width: 44, height: 36) }
+                } label: { Image(systemName: "doc.on.doc").font(.caption).frame(width: 44, height: 44) }
                     .accessibilityLabel("Копіювати повідомлення")
             }
             Text(text).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
@@ -171,6 +201,11 @@ struct FoundationView: View {
     private var settingsView: some View {
         NavigationStack {
             Form {
+                Section("Crimson Core") {
+                    Toggle("Тактильний відгук", isOn: $haptics)
+                    Toggle("Анімація аватара", isOn: $motion)
+                    Text("Системне обмеження руху завжди має пріоритет. Тактильний відгук залежить від пристрою та налаштувань iOS.").font(.footnote)
+                }
                 Section("Підключення") {
                     TextField("https://server.example", text: $endpoint).textContentType(.URL)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -268,7 +303,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.5.7.1")
+                    Text("Crimson Core Minimal · 0.5.8")
                     Text("Rust Core " + coreVersion)
                 }
             }
