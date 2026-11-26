@@ -40,11 +40,11 @@ jobs:
           cargo build --manifest-path android/native/Cargo.toml --target aarch64-linux-android --release
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           cp android/native/target/aarch64-linux-android/release/libhatoriel_android.so android/app/src/main/jniLibs/arm64-v8a/
-      - name: Assemble diagnostic APK
+      - name: Assemble debug APK
         run: gradle -p android --no-daemon assembleDebug
       - uses: actions/upload-artifact@v5
         with:
-          name: Hatoriel-Android-ARM64-Diagnostic
+          name: Hatoriel-Android-ARM64-Debug
           path: |
             android/app/build/outputs/apk/debug/*.apk
             android/app/src/main/jniLibs/arm64-v8a/libhatoriel_android.so
