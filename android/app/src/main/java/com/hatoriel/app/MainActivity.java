@@ -19,6 +19,8 @@ public final class MainActivity extends Activity {
     private Button memoryButton;
     private JSONArray history=new JSONArray();
     private String base,model;
+    private static String bridgeKey="",bridgeEndpoint="";
+    private EditText bridgeKeyField;
     private TextView status;
     private LinearLayout messages, settings;
     private ScrollView scroll;
@@ -53,7 +55,7 @@ public final class MainActivity extends Activity {
         draftView=label(draftText,16);draftView.setTextColor(0xfff4f0f2);draftView.setPadding(dp(12),dp(10),dp(12),dp(10));draftView.setBackgroundColor(0xff161417);draftView.setVisibility(active==null?View.GONE:View.VISIBLE);messages.addView(draftView);
         scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
     }
-    private void busy(boolean value){send.setEnabled(ready&&!value);stop.setEnabled(value);clear.setEnabled(!value);memoryButton.setEnabled(!value);hardwareButton.setEnabled(!value&&!importing);retry.setEnabled(ready&&!value&&history.length()>0);endpoint.setEnabled(!value);modelField.setEnabled(!value);importModel.setEnabled(!value&&!importing);}
+    private void busy(boolean value){send.setEnabled(ready&&!value);stop.setEnabled(value);clear.setEnabled(!value);memoryButton.setEnabled(!value);hardwareButton.setEnabled(!value&&!importing);retry.setEnabled(ready&&!value&&history.length()>0);endpoint.setEnabled(!value);modelField.setEnabled(!value);bridgeKeyField.setEnabled(!value);importModel.setEnabled(!value&&!importing);}
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
         prefs=getSharedPreferences("hatoriel_chat",MODE_PRIVATE);memory=new MobileMemory(prefs);
@@ -67,13 +69,13 @@ public final class MainActivity extends Activity {
         status=label("Ініціалізація…",12);status.setTextColor(0xffb5aab0);root.addView(status);
         Button config=new Button(this);config.setText("Налаштування підключення");root.addView(config);memoryButton=new Button(this);memoryButton.setText("Пам’ять та профіль");root.addView(memoryButton);memoryButton.setOnClickListener(v->showMemory());hardwareButton=new Button(this);hardwareButton.setText("Обладнання та моделі");root.addView(hardwareButton);hardwareButton.setOnClickListener(v->showHardware());Button reminders=new Button(this);reminders.setText("Нагадування");root.addView(reminders);reminders.setOnClickListener(v->showReminders());
         settings=new LinearLayout(this);settings.setOrientation(LinearLayout.VERTICAL);settings.setVisibility(View.GONE);root.addView(settings);
-        endpoint=field(base,"URL Ollama-сервера");modelField=field(model,"Назва моделі");settings.addView(endpoint);settings.addView(modelField);
+        endpoint=field(base,"URL Ollama-сервера");modelField=field(model,"Назва моделі");settings.addView(endpoint);settings.addView(modelField);bridgeKeyField=field(base.equals(bridgeEndpoint)?bridgeKey:"","Ключ сеансу Hatoriel (необов’язково)");bridgeKeyField.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);settings.addView(bridgeKeyField);settings.addView(label("Для шлюзу ПК потрібен HTTPS і ключ із розділу «Пристрої». Ключ зберігається лише в оперативній пам’яті до завершення процесу.",12));
         settings.addView(label("HTTP дозволено лише на цьому телефоні. HTTPS — для явно вибраного сервера. Історія надсилається на вибраний сервер.",12));
         Button save=new Button(this);save.setText("Зберегти підключення");settings.addView(save);
         config.setOnClickListener(v->settings.setVisibility(settings.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE));
-        save.setOnClickListener(v->{if(active!=null)return;String b=endpoint.getText().toString().trim(),m=modelField.getText().toString().trim();
-            try{ChatTransport.endpoint(b);if(m.isEmpty())throw new IllegalArgumentException("Вкажи модель");
-                new AlertDialog.Builder(this).setTitle("Підтвердити сервер").setMessage("Повідомлення, частина історії та, якщо дозволено, профіль і релевантні спогади надсилатимуться на "+b+". Продовжити?").setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{base=b;model=m;prefs.edit().putString("endpoint",b).putString("model",m).apply();settings.setVisibility(View.GONE);status.setText("Сервер налаштовано (ще не перевірено)");}).show();
+        save.setOnClickListener(v->{if(active!=null)return;String b=endpoint.getText().toString().trim(),m=modelField.getText().toString().trim(),key=bridgeKeyField.getText().toString().trim();
+            try{java.net.URL url=ChatTransport.endpoint(b);if(!key.isEmpty()&&(!"https".equalsIgnoreCase(url.getProtocol())||!key.matches("[0-9a-f]{64}")))throw new IllegalArgumentException("Для ключа потрібен HTTPS та 64 hex-символи");if(m.isEmpty())throw new IllegalArgumentException("Вкажи модель");
+                new AlertDialog.Builder(this).setTitle("Підтвердити сервер").setMessage("Повідомлення, частина історії та, якщо дозволено, профіль і релевантні спогади надсилатимуться на "+b+". Продовжити?").setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{base=b;model=m;bridgeKey=key;bridgeEndpoint=key.isEmpty()?"":b;prefs.edit().putString("endpoint",b).putString("model",m).apply();settings.setVisibility(View.GONE);status.setText("Сервер налаштовано (ще не перевірено)");}).show();
             }catch(Exception e){status.setText(e.getMessage());}});
         localModelStatus=label("Локальна модель: підготовка runtime",12);settings.addView(localModelStatus);
         importModel=new Button(this);importModel.setText("Імпортувати GGUF");settings.addView(importModel);
@@ -117,7 +119,7 @@ public final class MainActivity extends Activity {
         if(power!=null&&power.isPowerSaveMode())keep=false;
         if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)keep=false;
         try{
-            GenerationSession.start(this,data,server,selectedModel,keep);
+            GenerationSession.start(this,data,server,selectedModel,server.equals(bridgeEndpoint)?bridgeKey:"",keep);
             if(keep){try{startForegroundService(new android.content.Intent(this,GenerationService.class));}catch(RuntimeException e){GenerationSession.background=false;GenerationSession.status="Фоновий сервіс недоступний; генерація лише у відкритому чаті";GenerationSession.revision++;}}
             syncSession();
         }catch(RuntimeException e){status.setText("Помилка: "+e.getMessage());}
