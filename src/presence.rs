@@ -21,8 +21,7 @@ impl Presence {
             p.ids = items.iter().map(|i| i.id().clone()).collect();
             let result = (|| -> Result<tray_icon::TrayIcon, Box<dyn std::error::Error>> {
                 for item in &items { menu.append(item)?; }
-                let mut rgba = Vec::new();
-                for y in 0i32..32 { for x in 0i32..32 { let d=(x-16).abs()+(y-16).abs(); rgba.extend_from_slice(if d<13 { &[92,228,213,255] } else { &[0,0,0,0] }); }}
+                let rgba = super::crimson::icon_rgba();
                 Ok(TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("Hatoriel").with_icon(Icon::from_rgba(rgba,32,32)?).build()?)
             })();
             match result { Ok(t)=>p.tray=Some(t), Err(e)=>p.error=Some(format!("Tray unavailable: {e}")) }
@@ -53,12 +52,8 @@ impl Presence {
                     let (r,response)=ui.allocate_exact_size(egui::vec2(180.,160.),egui::Sense::click_and_drag());
                     if response.drag_started(){ctx.send_viewport_cmd(Cmd::StartDrag);}
                     let p=ui.painter();let c=r.center();let t=ctx.input(|i|i.time) as f32;
-                    let color=if busy {Color32::from_rgb(255,184,92)} else {Color32::from_rgb(92,228,213)};
-                    if busy {for k in 0..3 {let phase=(t*1.6+k as f32/3.).fract();p.circle_stroke(c,25.+phase*50.,egui::Stroke::new(2.,color.gamma_multiply(1.-phase)));}}
-                    for k in 0..3 {p.circle_stroke(c,40.+k as f32*13.,egui::Stroke::new(1.,color.gamma_multiply(0.6)));}
-                    let points=(0..6).map(|i|{let a=t*0.5+i as f32*std::f32::consts::TAU/6.;c+egui::vec2(a.cos(),a.sin())*48.}).collect();
-                    p.add(egui::Shape::closed_line(points,egui::Stroke::new(2.,color)));p.circle_filled(c,12.+(t*3.).sin()*4.,color);
-                    p.text(c+egui::vec2(0.,48.),egui::Align2::CENTER_CENTER,if busy{"THINKING"}else{"Hatoriel"},egui::FontId::monospace(12.),color);
+                    super::crimson::reticle(p,c,34.,t,busy);
+                    p.text(c+egui::vec2(0.,65.),egui::Align2::CENTER_CENTER,if busy{"THINKING"}else{"Hatoriel"},egui::FontId::monospace(12.),super::crimson::RED);
                     ui.horizontal(|ui|{if ui.small_button("Open").clicked(){ctx.send_viewport_cmd_to(egui::ViewportId::ROOT,Cmd::Visible(true));ctx.send_viewport_cmd_to(egui::ViewportId::ROOT,Cmd::Minimized(false));ctx.send_viewport_cmd_to(egui::ViewportId::ROOT,Cmd::Focus);self.hidden=false;} if ui.small_button("Hide").clicked(){cfg.avatar=false;changed=true;}});
                 });ctx.request_repaint_after(std::time::Duration::from_millis(50));
             });
