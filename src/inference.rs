@@ -3,12 +3,12 @@ use std::{io::{BufRead,BufReader},time::Duration};
 #[derive(Clone,Debug,Serialize,Deserialize)]
 pub struct Message { pub role:String,pub content:String }
 pub trait Backend: Send+Sync {
- fn generate(&self,model:&str,messages:&[Message],emit:&mut dyn FnMut(String))->Result<(),String>;
+ fn generate(&self,model:&str,messages:&[Message],emit:&mut dyn FnMut(String)->bool)->Result<(),String>;
  fn models(&self)->Result<Vec<String>,String>;
 }
 pub struct Ollama;
 impl Backend for Ollama {
- fn generate(&self,model:&str,messages:&[Message],emit:&mut dyn FnMut(String))->Result<(),String>{
+ fn generate(&self,model:&str,messages:&[Message],emit:&mut dyn FnMut(String)->bool)->Result<(),String>{
   (||->Result<(),Box<dyn std::error::Error>>{
    let client=reqwest::blocking::Client::builder().connect_timeout(Duration::from_secs(4)).timeout(Duration::from_secs(300)).build()?;
    let response=client.post("http://127.0.0.1:11434/api/chat").json(&serde_json::json!({"model":model,"messages":messages,"stream":true})).send()?.error_for_status()?;
@@ -22,15 +22,15 @@ impl Backend for Ollama {
   })().map_err(|e|e.to_string())
  }
 }
-fn decode(reader:impl BufRead,emit:&mut dyn FnMut(String))->Result<(),Box<dyn std::error::Error>>{
+fn decode(reader:impl BufRead,emit:&mut dyn FnMut(String)->bool)->Result<(),Box<dyn std::error::Error>>{
  for line in reader.lines(){let line=line?;if line.trim().is_empty(){continue;}let v:serde_json::Value=serde_json::from_str(&line)?;
  if let Some(e)=v["error"].as_str(){return Err(e.to_owned().into());}
- if let Some(s)=v["message"]["content"].as_str(){emit(s.into());}
+ if let Some(s)=v["message"]["content"].as_str(){if !emit(s.into()){return Err("Generation cancelled".into());}}
  if v["done"].as_bool()==Some(true){return Ok(());}
  } Err("Stream ended prematurely".into())
 }
 #[cfg(test)] mod tests{
  use super::*;
- #[test] fn stream(){let mut out=String::new();decode(std::io::Cursor::new(b"{\"message\":{\"content\":\"Hi\"}}\n{\"done\":true}\n"),&mut |s|out.push_str(&s)).unwrap();assert_eq!(out,"Hi");}
- #[test] fn incomplete(){assert!(decode(std::io::Cursor::new(b"{}\n"),&mut |_|{}).is_err());}
+ #[test] fn stream(){let mut out=String::new();decode(std::io::Cursor::new(b"{\"message\":{\"content\":\"Hi\"}}\n{\"done\":true}\n"),&mut |s|{out.push_str(&s);true}).unwrap();assert_eq!(out,"Hi");}
+ #[test] fn incomplete(){assert!(decode(std::io::Cursor::new(b"{}\n"),&mut |_|true).is_err());}
 }
