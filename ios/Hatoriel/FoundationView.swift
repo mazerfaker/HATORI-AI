@@ -102,6 +102,20 @@ struct FoundationView: View {
                 .onChange(of: chat.busy) { _ in proxy.scrollTo("end", anchor: .bottom) }
             }
             Divider()
+            if let item = chat.suggestion, !chat.busy {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Запам’ятати?").font(.headline)
+                    Text(item.content).font(.subheadline).lineLimit(4)
+                    HStack {
+                        Button("Відхилити") { chat.dismissSuggestion() }
+                        Spacer()
+                        Button("Зберегти") {
+                            do { try chat.approveSuggestion() }
+                            catch { chat.status = error.localizedDescription }
+                        }.buttonStyle(.borderedProminent)
+                    }
+                }.padding(12).background(surface)
+            }
             VStack(spacing: 8) {
                 HStack {
                     Text(chat.status).font(.caption).foregroundStyle(.secondary).lineLimit(3)
@@ -132,7 +146,7 @@ struct FoundationView: View {
             Button("Скасувати", role: .cancel) {}
             Button("Повторити") { chat.retry() }
         } message: { Text("Попередня відповідь збережеться, якщо нова генерація не завершиться.") }
-        .onChange(of: scenePhase) { phase in if phase == .background { chat.cancel() } }
+        .onChange(of: scenePhase) { phase in if phase == .background { chat.cancel() }; if phase == .active { chat.reloadMemory() } }
         .task { coreVersion = (try? NativeCore.version()) ?? "Недоступне" }
     }
 
@@ -179,6 +193,13 @@ struct FoundationView: View {
                     Text("CPU Preview. До 512 токенів відповіді. Оцінка RAM приблизна, сумісність не гарантована. У локальному режимі запити не надсилаються на сервер.").font(.footnote)
                     Text(chat.status).font(.caption)
                 }
+                Section("Довготривала пам’ять") {
+                    NavigationLink {
+                        MemoryView(chat: chat)
+                    } label: {
+                        LabeledContent("Пам’ять і профіль", value: "\(chat.memory.records.count)/100")
+                    }
+                }
                 Section("Особистість") {
                     Picker("Режим", selection: $personality.mode) {
                         ForEach(CoreOptions.modes, id: \.self) { mode in
@@ -222,7 +243,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.5.3")
+                    Text("Crimson Core Minimal · 0.5.4")
                     Text("Rust Core " + coreVersion)
                 }
             }
