@@ -8,3 +8,5 @@ pub mod llama_backend;
 pub mod adaptive;
 
 pub mod semantic;
+
+pub mod emotion;
