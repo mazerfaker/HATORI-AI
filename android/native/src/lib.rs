@@ -33,3 +33,32 @@ pub extern "system" fn Java_com_hatoriel_app_NativeCore_prepareHistory(mut env:J
  let value=match result{Ok(Ok(s))=>s,Ok(Err(e))=>serde_json::json!({"error":e}).to_string(),Err(_)=>"{\"error\":\"Native core failure\"}".into()};
  env.new_string(value).map(|s|s.into_raw()).unwrap_or(null_mut())
 }
+
+fn prepare_memory_json(json:&str)->Result<String,String>{
+ use hatori_ai::{adaptive,memory_core};
+ if json.len()>1024*1024{return Err("Context exceeds limit".into());}
+ let v:serde_json::Value=serde_json::from_str(json).map_err(|e|e.to_string())?;
+ let history:Vec<Message>=serde_json::from_value(v["history"].clone()).map_err(|e|e.to_string())?;
+ if history.len()>32{return Err("Too many messages".into());}
+ let query=history.last().filter(|m|m.role=="user").ok_or("Missing user message")?.content.clone();
+ if query.trim().is_empty()||query.chars().count()>12000{return Err("Invalid user message".into());}
+ let records=v["memories"].as_array().ok_or("Invalid memories")?;
+ if records.len()>100{return Err("Too many memories".into());}
+ let memories=records.iter().filter_map(|m|{let s=m["content"].as_str()?;if s.chars().count()>500{return None;}Some((s.to_owned(),m["importance"].as_u64().unwrap_or(50).min(100) as u8,m["id"].as_i64().unwrap_or(0)))}).collect::<Vec<_>>();
+ let profile:adaptive::Profile=serde_json::from_value(v["profile"].clone()).map_err(|e|e.to_string())?;
+ let relevant=memory_core::ranked(&query,&memories);
+ let req=core::Request{model:"mobile".into(),mode:"Companion".into(),traits:[90,80,90,90,90,80,70],query,history,memories,profile,mood:None,dynamic_style:true,embedding_model:None};
+ serde_json::to_string(&core::prepare(&req,&relevant)).map_err(|e|e.to_string())
+}
+#[no_mangle]
+pub extern "system" fn Java_com_hatoriel_app_NativeCore_prepareMemory(mut env:JNIEnv,_class:JClass,input:JString)->jstring{
+ let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<String,String>{let json:String=env.get_string(&input).map_err(|e|e.to_string())?.into();prepare_memory_json(&json)}));
+ let value=match result{Ok(Ok(s))=>s,Ok(Err(e))=>serde_json::json!({"error":e}).to_string(),Err(_)=>serde_json::json!({"error":"Native core failure"}).to_string()};
+ env.new_string(value).map(|s|s.into_raw()).unwrap_or(null_mut())
+}
+#[no_mangle]
+pub extern "system" fn Java_com_hatoriel_app_NativeCore_suggestMemory(mut env:JNIEnv,_class:JClass,input:JString)->jstring{
+ let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<String,String>{let query:String=env.get_string(&input).map_err(|e|e.to_string())?.into();Ok(match hatori_ai::memory_suggest::suggest(&query){Some(m)=>serde_json::json!({"content":m.content,"category":m.category,"importance":m.importance}).to_string(),None=>"null".into()})}));
+ let value=match result{Ok(Ok(s))=>s,_=>"null".into()};env.new_string(value).map(|s|s.into_raw()).unwrap_or(null_mut())
+}
+#[cfg(test)]mod memory_tests{use super::*;#[test]fn selects_relevant(){let input=serde_json::json!({"history":[{"role":"user","content":"guitar"}],"memories":[{"id":1,"content":"guitar rock","importance":90},{"id":2,"content":"unrelated","importance":100}],"profile":{}});let s=prepare_memory_json(&input.to_string()).unwrap();assert!(s.contains("guitar rock"));assert!(!s.contains("unrelated"));}}
