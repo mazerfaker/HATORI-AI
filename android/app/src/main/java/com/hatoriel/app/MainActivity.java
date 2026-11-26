@@ -23,7 +23,10 @@ public final class MainActivity extends Activity {
     private EditText input, endpoint, modelField;
     private Button send,stop,clear;
     private ChatTransport active;
-    private boolean ready,destroyed;
+    private boolean ready,destroyed,importing;
+    private TextView localModelStatus;
+    private Button importModel;
+    private Thread importWorker;
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
     private TextView label(String value,int size){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setTextColor(0xfff4f0f2);return t;}
     private EditText field(String value,String hint){EditText e=new EditText(this);e.setText(value);e.setHint(hint);e.setSingleLine(true);return e;}
@@ -44,7 +47,7 @@ public final class MainActivity extends Activity {
         draftView=label(draftText,16);draftView.setTextColor(0xfff4f0f2);draftView.setPadding(dp(12),dp(10),dp(12),dp(10));draftView.setBackgroundColor(0xff161417);draftView.setVisibility(active==null?View.GONE:View.VISIBLE);messages.addView(draftView);
         scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
     }
-    private void busy(boolean value){send.setEnabled(ready&&!value);stop.setEnabled(value);clear.setEnabled(!value);retry.setEnabled(ready&&!value&&history.length()>0);endpoint.setEnabled(!value);modelField.setEnabled(!value);}
+    private void busy(boolean value){send.setEnabled(ready&&!value);stop.setEnabled(value);clear.setEnabled(!value);retry.setEnabled(ready&&!value&&history.length()>0);endpoint.setEnabled(!value);modelField.setEnabled(!value);importModel.setEnabled(!value&&!importing);}
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
         prefs=getSharedPreferences("hatoriel_chat",MODE_PRIVATE);
@@ -66,6 +69,10 @@ public final class MainActivity extends Activity {
             try{ChatTransport.endpoint(b);if(m.isEmpty())throw new IllegalArgumentException("Вкажи модель");
                 new AlertDialog.Builder(this).setTitle("Підтвердити сервер").setMessage("Повідомлення та частина історії надсилатимуться на "+b+". Продовжити?").setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{base=b;model=m;prefs.edit().putString("endpoint",b).putString("model",m).apply();settings.setVisibility(View.GONE);status.setText("Сервер налаштовано (ще не перевірено)");}).show();
             }catch(Exception e){status.setText(e.getMessage());}});
+        localModelStatus=label("Локальна модель: підготовка runtime",12);settings.addView(localModelStatus);
+        importModel=new Button(this);importModel.setText("Імпортувати GGUF");settings.addView(importModel);
+        importModel.setOnClickListener(v->{if(importing||active!=null)return;new AlertDialog.Builder(this).setTitle("Імпорт локальної моделі").setMessage("Файл копіюється в приватне сховище Hatoriel. Попередня локальна модель буде замінена після успішного імпорту. Запуск моделі ще експериментальний і не підключений.").setNegativeButton("Скасувати",null).setPositiveButton("Обрати файл",(d,w)->{android.content.Intent intent=new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);intent.setType("*/*");intent.addCategory(android.content.Intent.CATEGORY_OPENABLE);try{startActivityForResult(intent,71);}catch(android.content.ActivityNotFoundException e){status.setText("Файловий менеджер недоступний");}}).show();});
+        refreshLocalModel();
         clear=new Button(this);clear.setText("Очистити історію");settings.addView(clear);
         clear.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну історію?").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(active==null){history=new JSONArray();prefs.edit().remove("history").apply();render();}}).show());
         scroll=new ScrollView(this);messages=new LinearLayout(this);messages.setOrientation(LinearLayout.VERTICAL);scroll.addView(messages);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
@@ -110,5 +117,7 @@ public final class MainActivity extends Activity {
             });
         },"hatoriel-inference").start();
     }
-    @Override protected void onDestroy(){destroyed=true;if(active!=null)active.cancel();super.onDestroy();}
+    private void refreshLocalModel(){try{java.io.File file=ModelImport.selected(this);localModelStatus.setText(file.isFile()?String.format(java.util.Locale.ROOT,"GGUF: %.2f GiB · імпортовано, запуск ще недоступний",file.length()/1073741824.0):"GGUF не імпортовано");}catch(java.io.IOException e){localModelStatus.setText(e.getMessage());}}
+    @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
+    @Override protected void onDestroy(){destroyed=true;if(importWorker!=null)importWorker.interrupt();if(active!=null)active.cancel();super.onDestroy();}
 }
