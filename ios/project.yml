@@ -5,16 +5,20 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.5.2"
-    CURRENT_PROJECT_VERSION: "52"
+    MARKETING_VERSION: "0.5.3"
+    CURRENT_PROJECT_VERSION: "53"
 targets:
   Hatoriel:
     type: application
     platform: iOS
     sources:
       - Hatoriel
+      - path: build/llama-LICENSE.txt
+        buildPhase: resources
     dependencies:
       - framework: build/HatorielCore.xcframework
+        embed: false
+      - framework: build/HatorielLocal.xcframework
         embed: false
     settings:
       base:
@@ -23,7 +27,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Hatoriel
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         SWIFT_OBJC_BRIDGING_HEADER: Hatoriel/Hatoriel-Bridging-Header.h
-        OTHER_LDFLAGS: ["$(inherited)", "-lresolv", "-liconv", "-framework", "Security", "-framework", "SystemConfiguration"]
+        OTHER_LDFLAGS: ["$(inherited)", "-lresolv", "-liconv", "-lc++", "-framework", "Security", "-framework", "SystemConfiguration"]
 schemes:
   Hatoriel:
     build:
