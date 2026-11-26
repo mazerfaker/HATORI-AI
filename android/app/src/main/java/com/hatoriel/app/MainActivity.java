@@ -207,13 +207,24 @@ public final class MainActivity extends Activity {
                             seal.setEnabled(true);open.setEnabled(true);
                             if(export){pack.setText(result.optString("package"));report.setText("Пакет створено");return;}
                             JSONArray additions=result.optJSONArray("additions");
+                            if(additions==null){report.setText("Некоректний результат перегляду");return;}
                             String summary="Нові: "+(additions==null?0:additions.length())+"; дублікати: "+result.optInt("duplicates")+"; конфлікти: "+result.optInt("conflicts");
                             LinearLayout review=new LinearLayout(this);review.setOrientation(LinearLayout.VERTICAL);review.setPadding(dp(20),0,dp(20),0);review.addView(label(summary,14));
+                            review.addView(label("Нові записи (локальні конфлікти не змінюються):",14));
+                            for(int i=0;i<additions.length();i++){
+                                JSONObject row=additions.optJSONObject(i);if(row==null)continue;
+                                TextView item=label(row.optString("category")+" · "+row.optInt("importance")+"/100\n"+row.optString("content"),14);
+                                item.setTextIsSelectable(true);review.addView(item);
+                            }
+                            JSONObject incomingProfile=result.optJSONObject("profile"), incomingOptions=result.optJSONObject("options");
+                            if(incomingProfile!=null)review.addView(label("Вхідний профіль:\nІнтереси: "+incomingProfile.optString("interests")+"\nСтиль: "+incomingProfile.optString("communication")+"\nЦілі: "+incomingProfile.optString("goals"),14));
+                            if(incomingOptions!=null)review.addView(label("Вхідна особистість: "+incomingOptions.optString("mode")+"\nРиси: "+incomingOptions.optString("traits")+"\nАдаптивний стиль: "+incomingOptions.optBoolean("dynamic_style")+"\nЕмоції: "+incomingOptions.optBoolean("emotion_enabled"),14));
                             CheckBox profile=new CheckBox(this);profile.setText("Замінити профіль");review.addView(profile);
                             CheckBox personality=new CheckBox(this);personality.setText("Замінити особистість");review.addView(personality);
-                            new AlertDialog.Builder(this).setTitle("Підтвердити імпорт?").setView(review).setNegativeButton("Скасувати",null).setPositiveButton("Об’єднати",(d,w)->{
+                            ScrollView reviewScroll=new ScrollView(this);reviewScroll.addView(review);
+                            new AlertDialog.Builder(this).setTitle("Підтвердити імпорт?").setView(reviewScroll).setNegativeButton("Скасувати",null).setPositiveButton("Об’єднати",(d,w)->{
                                 try{
-                                    if(GenerationSession.active!=null||!baseline.equals(memory.snapshot().toString())||!encoded.equals(pack.getText().toString()))throw new IllegalStateException("Дані змінилися. Повтори перегляд.");
+                                    if(!dialog.isShowing()||isFinishing()||isDestroyed()||GenerationSession.active!=null||!baseline.equals(memory.snapshot().toString())||!encoded.equals(pack.getText().toString()))throw new IllegalStateException("Дані змінилися. Повтори перегляд.");
                                     memory.applySync(result,profile.isChecked(),personality.isChecked());report.setText("Імпортовано; передачу пам’яті серверу вимкнено.");
                                 }catch(Exception e){report.setText(e.getMessage());}
                             }).show();
