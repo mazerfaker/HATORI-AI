@@ -30,8 +30,28 @@ final class MobileMemory {
         prefs.edit().putString("memory_profile",p.toString()).apply();
     }
     private static String limit(String s){return s.codePointCount(0,s.length())<=1000?s:s.substring(0,s.offsetByCodePoints(0,1000));}
+    JSONObject options()throws JSONException{
+        return new JSONObject(prefs.getString("sync_options","{\"mode\":\"Companion\",\"traits\":[90,80,90,90,90,80,70],\"dynamic_style\":true,\"emotion_enabled\":false,\"mood\":{}}"));
+    }
+    JSONObject snapshot()throws JSONException{
+        return new JSONObject().put("version",1).put("records",new JSONArray(prefs.getString("approved_memories","[]"))).put("profile",new JSONObject(prefs.getString("memory_profile","{}"))).put("options",options());
+    }
+    void applySync(JSONObject plan,boolean profile,boolean personality)throws JSONException{
+        JSONArray rows=new JSONArray(prefs.getString("approved_memories","[]")), additions=plan.getJSONArray("additions");
+        if(rows.length()+additions.length()>100)throw new IllegalArgumentException("Ліміт 100 спогадів");
+        long id=Math.max(System.currentTimeMillis(),prefs.getLong("memory_last_id",0)+1);
+        for(int n=0;n<additions.length();n++){
+            JSONObject row=new JSONObject(additions.getJSONObject(n).toString());
+            row.put("id",id++);rows.put(row);
+        }
+        SharedPreferences.Editor edit=prefs.edit().putString("approved_memories",rows.toString()).putLong("memory_last_id",id).putBoolean("memory_context",false);
+        if(profile)edit.putString("memory_profile",plan.getJSONObject("profile").toString());
+        if(personality)edit.putString("sync_options",plan.getJSONObject("options").toString());
+        if(!edit.commit())throw new IllegalStateException("Не вдалося зберегти імпорт");
+    }
     String context(JSONArray history)throws JSONException{
         JSONObject data=new JSONObject().put("history",history);
+        data.put("options",options());
         data.put("memories",enabled()?records():new JSONArray());
         data.put("profile",enabled()?profile():new JSONObject());
         return data.toString();
