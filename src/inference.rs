@@ -34,3 +34,6 @@ fn decode(reader:impl BufRead,emit:&mut dyn FnMut(String)->bool)->Result<(),Box<
  #[test] fn stream(){let mut out=String::new();decode(std::io::Cursor::new(b"{\"message\":{\"content\":\"Hi\"}}\n{\"done\":true}\n"),&mut |s|{out.push_str(&s);true}).unwrap();assert_eq!(out,"Hi");}
  #[test] fn incomplete(){assert!(decode(std::io::Cursor::new(b"{}\n"),&mut |_|true).is_err());}
 }
+
+#[cfg(test)]
+#[test]fn cancellation_stops_stream(){let mut calls=0;let result=decode(std::io::Cursor::new("{\"message\":{\"content\":\"Hi\"}}\n{\"done\":true}\n"),&mut |_|{calls+=1;false});assert!(result.is_err());assert_eq!(calls,1);}
