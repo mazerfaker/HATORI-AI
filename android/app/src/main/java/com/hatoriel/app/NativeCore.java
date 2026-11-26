@@ -4,4 +4,5 @@ public final class NativeCore {
     private NativeCore() {}
     public static native String version();
     public static native String prepare(String input);
+    public static native String prepareHistory(String historyJson);
 }
