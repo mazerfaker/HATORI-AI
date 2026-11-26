@@ -3,19 +3,23 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+concurrency:
+  group: hatori-windows-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-targets
       - run: cargo test --all-targets
       - run: cargo build --release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: HATORI-Windows
           path: |
@@ -33,7 +37,7 @@ jobs:
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
           & $iscc "/DAppVersion=$version" installer/HATORI.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: HATORI-Windows-Installer
           path: dist/*-Setup.exe
@@ -47,7 +51,7 @@ jobs:
           Set-Content portable/models/README.txt 'Place GGUF models here.'
           Set-Content portable/runtime/README.txt 'Place compatible llama-server.exe and its DLLs here.'
           Set-Content portable/README.txt 'Extract the entire folder. Close HATORI before moving it. Data is stored locally in data. Models and runtime are not included.'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: HATORI-Windows-Portable
           path: portable/
