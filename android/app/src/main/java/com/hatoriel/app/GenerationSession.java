@@ -14,7 +14,7 @@ final class GenerationSession {
     static String partial="",status="";
     static boolean background;
     static long revision,job;
-    static void start(Context context,String data,String server,String model,boolean keepRunning){
+    static void start(Context context,String data,String server,String model,String sessionKey,boolean keepRunning){
         if(active!=null)throw new IllegalStateException("Generation already active");
         Context app=context.getApplicationContext();
         ChatTransport transport=new ChatTransport();active=transport;background=keepRunning;
@@ -26,7 +26,7 @@ final class GenerationSession {
                 String prepared=NativeCore.prepareMemory(data);
                 if(prepared==null||!prepared.startsWith("["))throw new IllegalStateException("Core: "+prepared);
                 long[] last={0};
-                reply=transport.request(server,model,new JSONArray(prepared),text->{
+                reply=transport.request(server,model,new JSONArray(prepared),sessionKey,text->{
                     long now=SystemClock.elapsedRealtime();
                     if(now-last[0]<100)return;last[0]=now;
                     MAIN.post(()->{if(active==transport&&!transport.isCancelled()){partial=text;revision++;}});
