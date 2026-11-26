@@ -32,3 +32,6 @@ User-approved Minimal concept implemented as native theme, procedural reticle vi
 
 ## 0.4.9 stability preview
 Network parser regression tests, lint gating, reduced-motion support, keyboard layout and lifecycle improvements. See ../QA_049.md for the acceptance checklist and unresolved build/device validation. No confirmed stable binary yet. Minimal design preserved.
+
+## 0.5.7 Cross-Platform Sync Preview
+Manual encrypted snapshot export/preview/merge for approved memories, profile and personality. Uses shared Rust AES-256-GCM + Argon2id implementation; no cloud or continuous sync. Profile/personality replacement optional; conflicts retain local data; mobile import revokes remote memory consent. See ../CROSS_PLATFORM_SYNC.md for limits, security and outstanding QA. All platform versions are aligned to 0.5.7. Builds and device transfers are not yet verified.
