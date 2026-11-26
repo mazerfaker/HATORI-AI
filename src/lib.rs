@@ -6,3 +6,5 @@ pub mod model_manager;
 pub mod llama_backend;
 
 pub mod adaptive;
+
+pub mod semantic;
