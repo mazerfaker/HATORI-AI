@@ -20,6 +20,8 @@ struct MemoryVault: Codable, Sendable {
     static let labels = ["General":"Загальне","Interests":"Інтереси","Preferences":"Уподобання","Skills":"Навички","Goals":"Цілі","Projects":"Проєкти","Relationships":"Стосунки","Other":"Інше"]
     var records: [MemoryRecord] = []
     var profile = CoreProfile()
+    // Optional for compatibility with vaults created before 0.5.7.1.
+    var personality: CoreOptions? = nil
     var localEnabled = true
     var suggestionsEnabled = true
     var approvedEndpoint: String? = nil
