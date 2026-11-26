@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 private let graphite = Color(red: 28/255, green: 28/255, blue: 30/255)
 private let surface = Color(red: 43/255, green: 43/255, blue: 46/255)
@@ -55,6 +56,9 @@ struct FoundationView: View {
     @State private var confirmRetry = false
     @State private var coreVersion = ""
     @State private var personality = CoreOptions()
+    @State private var chooseGGUF = false
+    @State private var confirmImport = false
+    @State private var confirmRemove = false
     private let traitLabels = ["Аналітичність","Емпатія","Допитливість","Гумор","Ініціативність","Емоційність","Сарказм"]
     private let modeLabels = ["Companion":"Компаньйон","Assistant":"Асистент","Developer":"Розробник","Researcher":"Дослідник"]
     private let moodLabels = ["Calm":"Спокій","Joy":"Радість","Concern":"Турбота","Surprise":"Здивування","Curiosity":"Допитливість"]
@@ -66,7 +70,7 @@ struct FoundationView: View {
                 CrimsonReticle(busy: chat.busy).frame(width: 44, height: 44)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("H A T O R I E L").font(.headline)
-                    Text("CRIMSON CORE").font(.caption2).foregroundStyle(crimson)
+                    Text(chat.localMode ? "CRIMSON CORE · LOCAL" : "CRIMSON CORE").font(.caption2).foregroundStyle(crimson)
                 }
                 Spacer()
                 Button {
@@ -119,7 +123,7 @@ struct FoundationView: View {
                             .font(.headline).frame(width: 46, height: 46)
                             .background(Color(red: 0.63, green: 0.08, blue: 0.1), in: RoundedRectangle(cornerRadius: 12))
                     }.accessibilityLabel(chat.busy ? "Зупинити" : "Надіслати")
-                     .disabled(!chat.busy && input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                     .disabled(chat.importing || (!chat.busy && input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                 }
             }.padding(12)
         }.background(graphite.ignoresSafeArea()).foregroundStyle(.white).tint(crimson)
@@ -154,10 +158,26 @@ struct FoundationView: View {
                     TextField("https://server.example", text: $endpoint).textContentType(.URL)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("Модель", text: $model).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Text("Лише HTTPS із довіреним сертифікатом. Повідомлення та частина історії надсилаються на вибраний сервер Ollama. Локальний GGUF ще не підключено.")
+                    Text("Лише HTTPS із довіреним сертифікатом. Повідомлення та частина історії надсилаються на вибраний сервер Ollama. Для локального режиму скористайся розділом «Локальний AI».")
                         .font(.footnote)
                     if !settingsError.isEmpty { Text(settingsError).foregroundStyle(crimson) }
                     Button("Зберегти підключення") { confirmServer = true }
+                }
+                Section("Локальний AI · Preview") {
+                    Toggle("Локальна генерація", isOn: Binding(get: { chat.localMode }, set: { chat.configureLocal(enabled: $0, profile: chat.localProfile) }))
+                        .disabled(chat.importing)
+                    Picker("Профіль", selection: Binding(get: { chat.localProfile }, set: { chat.configureLocal(enabled: chat.localMode, profile: $0) })) {
+                        ForEach(LocalProfile.allCases, id: \.self) { profile in Text(profile.rawValue).tag(profile) }
+                    }.disabled(chat.importing)
+                    LabeledContent("Модель", value: chat.localSize > 0 ? ByteCountFormatter.string(fromByteCount: chat.localSize, countStyle: .binary) : "Не імпортовано")
+                    LabeledContent("Контекст", value: "\(chat.localProfile.context) токенів")
+                    LabeledContent("Потоки CPU", value: "\(chat.localProfile.threads)")
+                    LabeledContent("Оцінка RAM", value: chat.localSize > 0 ? ByteCountFormatter.string(fromByteCount: LocalModel.estimate(chat.localSize, profile: chat.localProfile), countStyle: .binary) : "—")
+                    LabeledContent("Бюджет RAM", value: ByteCountFormatter.string(fromByteCount: LocalModel.budget, countStyle: .binary))
+                    Button(chat.importing ? "Імпорт…" : "Імпортувати GGUF") { confirmImport = true }.disabled(chat.importing)
+                    Button("Видалити локальну копію", role: .destructive) { confirmRemove = true }.disabled(chat.importing || chat.localSize == 0)
+                    Text("CPU Preview. До 512 токенів відповіді. Оцінка RAM приблизна, сумісність не гарантована. У локальному режимі запити не надсилаються на сервер.").font(.footnote)
+                    Text(chat.status).font(.caption)
                 }
                 Section("Особистість") {
                     Picker("Режим", selection: $personality.mode) {
@@ -202,9 +222,23 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.5.2")
+                    Text("Crimson Core Minimal · 0.5.3")
                     Text("Rust Core " + coreVersion)
                 }
+            }
+            .fileImporter(isPresented: $chooseGGUF, allowedContentTypes: [.data]) { result in
+                switch result {
+                case .success(let url): chat.importModel(url)
+                case .failure(let error): chat.status = error.localizedDescription
+                }
+            }
+            .confirmationDialog("Імпортувати модель?", isPresented: $confirmImport, titleVisibility: .visible) {
+                Button("Обрати GGUF") { chooseGGUF = true }
+                Button("Скасувати", role: .cancel) {}
+            } message: { Text("Нова копія замінить попередню тільки після успішного імпорту.") }
+            .confirmationDialog("Видалити копію GGUF?", isPresented: $confirmRemove, titleVisibility: .visible) {
+                Button("Видалити", role: .destructive) { chat.removeModel() }
+                Button("Скасувати", role: .cancel) {}
             }
             .navigationTitle("Налаштування")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Готово") { settings = false } } }
