@@ -17,7 +17,8 @@ final class ChatTransport {
             throw new IOException("Дозволено HTTPS або HTTP лише на localhost/127.0.0.1");
         return uri.resolve("/api/chat").toURL();
     }
-    String request(String base,String model,JSONArray messages) throws Exception {
+    interface Chunk { void accept(String partial); }
+    String request(String base,String model,JSONArray messages,Chunk chunk) throws Exception {
         URL url=endpoint(base);
         if(model.trim().isEmpty())throw new IOException("Вкажи модель");
         HttpURLConnection c=(HttpURLConnection)url.openConnection();
@@ -28,17 +29,37 @@ final class ChatTransport {
             c.setConnectTimeout(8000);c.setReadTimeout(120000);
             c.setRequestMethod("POST");c.setDoOutput(true);
             c.setRequestProperty("Content-Type","application/json");
-            byte[] data=new JSONObject().put("model",model).put("messages",messages).put("stream",false).toString().getBytes(StandardCharsets.UTF_8);
+            byte[] data=new JSONObject().put("model",model).put("messages",messages).put("stream",true).toString().getBytes(StandardCharsets.UTF_8);
             c.setFixedLengthStreamingMode(data.length);
             try(OutputStream out=c.getOutputStream()){out.write(data);}
             int code=c.getResponseCode();
             if(code<200||code>=300)throw new IOException("HTTP "+code);
-            ByteArrayOutputStream bytes=new ByteArrayOutputStream();
-            try(InputStream in=c.getInputStream()){byte[] buffer=new byte[4096];int n;while((n=in.read(buffer))!=-1){if(cancelled)throw new InterruptedIOException("Cancelled");if(bytes.size()+n>524288)throw new IOException("Response too large");bytes.write(buffer,0,n);}}
-            JSONObject response=new JSONObject(new String(bytes.toByteArray(),StandardCharsets.UTF_8));
-            String reply=response.getJSONObject("message").getString("content").trim();
-            if(reply.isEmpty())throw new IOException("Empty response");
-            return reply;
+            StringBuilder reply=new StringBuilder();
+            boolean done=false;
+            int total=0;
+            try(InputStream in=c.getInputStream()){
+                ByteArrayOutputStream line=new ByteArrayOutputStream();
+                int next;byte[] buffer=new byte[4096];
+                while(!done&&(next=in.read(buffer))!=-1){
+                    if(cancelled)throw new InterruptedIOException("Cancelled");
+                    total+=next;if(total>2097152)throw new IOException("Stream too large");
+                    for(int i=0;i<next;i++){
+                        if(buffer[i]!='\n'){line.write(buffer[i]);continue;}
+                        String json=line.toString("UTF-8").trim();line.reset();
+                        if(json.isEmpty())continue;
+                        JSONObject event=new JSONObject(json);
+                        if(event.has("error"))throw new IOException(event.getString("error"));
+                        JSONObject message=event.optJSONObject("message");
+                        if(message!=null){reply.append(message.optString("content",""));if(reply.length()>262144)throw new IOException("Response too large");chunk.accept(reply.toString());}
+                        if(event.optBoolean("done")){done=true;break;}
+                    }
+                }
+                if(!done&&line.size()>0){JSONObject event=new JSONObject(line.toString("UTF-8"));if(event.has("error"))throw new IOException(event.getString("error"));JSONObject message=event.optJSONObject("message");if(message!=null)reply.append(message.optString("content",""));done=event.optBoolean("done");}
+            }
+            if(cancelled)throw new InterruptedIOException("Cancelled");
+            if(!done)throw new IOException("Incomplete stream");
+            if(reply.toString().trim().isEmpty())throw new IOException("Empty response");
+            return reply.toString();
         } finally {c.disconnect();connection=null;}
     }
     boolean isCancelled(){return cancelled;}
