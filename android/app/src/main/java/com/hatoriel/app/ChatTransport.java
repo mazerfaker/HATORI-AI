@@ -59,6 +59,7 @@ final class ChatTransport {
                 if(!done&&line.size()>0){JSONObject event=new JSONObject(line.toString("UTF-8"));if(event.has("error"))throw new IOException(event.getString("error"));JSONObject message=event.optJSONObject("message");if(message!=null)reply.append(message.optString("content",""));done=event.optBoolean("done");}
             }
             if(cancelled)throw new InterruptedIOException("Cancelled");
+            if(reply.length()>262144)throw new IOException("Response too large");
             if(!done)throw new IOException("Incomplete stream");
             if(reply.toString().trim().isEmpty())throw new IOException("Empty response");
             return reply.toString();
