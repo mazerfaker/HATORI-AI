@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
+python3 generate-icon.py
 mkdir -p build/headers build/simulator
 sed '/#include "Hatoriel-Local-Header.h"/d' Hatoriel/Hatoriel-Bridging-Header.h > build/headers/HatorielCore.h
 export IPHONEOS_DEPLOYMENT_TARGET=16.0
