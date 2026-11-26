@@ -62,7 +62,7 @@ public final class MainActivity extends Activity {
         if(android.os.Build.VERSION.SDK_INT<30)root.setFitsSystemWindows(true);
         TextView title=label("HATORIEL  /  MOBILE",24);title.setTextColor(0xfff4f0f2);root.addView(title);
         status=label("Ініціалізація…",12);status.setTextColor(0xffb5aab0);root.addView(status);
-        Button config=new Button(this);config.setText("Налаштування підключення");root.addView(config);memoryButton=new Button(this);memoryButton.setText("Пам’ять та профіль");root.addView(memoryButton);memoryButton.setOnClickListener(v->showMemory());hardwareButton=new Button(this);hardwareButton.setText("Обладнання та моделі");root.addView(hardwareButton);hardwareButton.setOnClickListener(v->showHardware());
+        Button config=new Button(this);config.setText("Налаштування підключення");root.addView(config);memoryButton=new Button(this);memoryButton.setText("Пам’ять та профіль");root.addView(memoryButton);memoryButton.setOnClickListener(v->showMemory());hardwareButton=new Button(this);hardwareButton.setText("Обладнання та моделі");root.addView(hardwareButton);hardwareButton.setOnClickListener(v->showHardware());Button reminders=new Button(this);reminders.setText("Нагадування");root.addView(reminders);reminders.setOnClickListener(v->showReminders());
         settings=new LinearLayout(this);settings.setOrientation(LinearLayout.VERTICAL);settings.setVisibility(View.GONE);root.addView(settings);
         endpoint=field(base,"URL Ollama-сервера");modelField=field(model,"Назва моделі");settings.addView(endpoint);settings.addView(modelField);
         settings.addView(label("HTTP дозволено лише на цьому телефоні. HTTPS — для явно вибраного сервера. Історія надсилається на вибраний сервер.",12));
@@ -83,7 +83,7 @@ public final class MainActivity extends Activity {
         LinearLayout buttons=new LinearLayout(this);send=new Button(this);send.setText("Надіслати");stop=new Button(this);stop.setText("Зупинити");buttons.addView(send,new LinearLayout.LayoutParams(0,-2,1));buttons.addView(stop,new LinearLayout.LayoutParams(0,-2,1));root.addView(buttons);send.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xff68263a));retry=new Button(this);retry.setText("Повторити останній запит");root.addView(retry);retry.setOnClickListener(v->retryLast());
         try{status.setText("Rust Core "+NativeCore.version()+" · "+base);ready=true;}catch(LinkageError e){status.setText("Rust Core недоступне: "+e.getMessage());}
         send.setOnClickListener(v->generate());stop.setOnClickListener(v->{if(active!=null){active.cancel();status.setText("Зупинення…");}});
-        setContentView(root);root.requestApplyInsets();render();busy(false);
+        setContentView(root);root.requestApplyInsets();render();busy(false);MobileReminders.channel(this);
     }
     private void generate(){
         String query=input.getText().toString().trim();if(!ready||active!=null||query.isEmpty())return;
@@ -176,6 +176,28 @@ public final class MainActivity extends Activity {
         Button remove=new Button(this);remove.setText("Видалити імпортовану GGUF");panel.addView(remove);
         remove.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну модель?").setMessage("Видаляється лише копія в Hatoriel. Початковий файл не змінюється.").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(importing||active!=null)return;try{if(!ModelImport.remove(this))throw new java.io.IOException("Не вдалося видалити");refreshLocalModel();refresh.run();}catch(Exception e){status.setText(e.getMessage());}}).show());
         refresh.run();new AlertDialog.Builder(this).setTitle("Hardware & Model Manager").setView(sv).setPositiveButton("Закрити",null).show();
+    }
+    @Override protected void onResume(){super.onResume();MobileReminders.channel(this);MobileReminders.schedule(this);}
+    @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){super.onRequestPermissionsResult(request,permissions,results);if(request==45){MobileReminders.schedule(this);if(!MobileReminders.permitted(this))Toast.makeText(this,"Сповіщення не дозволено",Toast.LENGTH_LONG).show();}}
+    private void showReminders(){
+        ScrollView sv=new ScrollView(this);LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(20),dp(8),dp(20),dp(8));sv.addView(panel);
+        CheckBox enabled=new CheckBox(this);enabled.setText("Дозволити нагадування");enabled.setChecked(MobileReminders.enabled(this));panel.addView(enabled);
+        CheckBox quiet=new CheckBox(this);quiet.setText("Не турбувати");quiet.setChecked(MobileReminders.quiet(this));panel.addView(quiet);
+        enabled.setOnCheckedChangeListener((b,value)->{MobileReminders.prefs(this).edit().putBoolean("enabled",value).commit();if(value&&android.os.Build.VERSION.SDK_INT>=33&&!MobileReminders.permitted(this))requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},45);MobileReminders.schedule(this);});
+        quiet.setOnCheckedChangeListener((b,value)->{MobileReminders.prefs(this).edit().putBoolean("quiet",value).commit();MobileReminders.schedule(this);});
+        Button system=new Button(this);system.setText("Системні налаштування звуку та вібрації");panel.addView(system);system.setOnClickListener(v->{android.content.Intent i=new android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,getPackageName()).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID,MobileReminders.CHANNEL);try{startActivity(i);}catch(android.content.ActivityNotFoundException e){Toast.makeText(this,"Налаштування недоступні",Toast.LENGTH_SHORT).show();}});
+        panel.addView(label("Нагадування приблизні: Android може затримувати їх. У режимі тиші очікують до його вимкнення.",12));
+        EditText text=new EditText(this);text.setHint("Про що нагадати?");panel.addView(text);
+        EditText minutes=field("30","Через скільки хвилин");minutes.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);panel.addView(minutes);
+        Button add=new Button(this);add.setText("Додати нагадування");panel.addView(add);
+        LinearLayout list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);panel.addView(list);
+        Runnable refresh=()->{list.removeAllViews();JSONArray rows=MobileReminders.rows(this);for(int j=rows.length()-1;j>=0;j--){JSONObject row=rows.optJSONObject(j);if(row==null)continue;LinearLayout item=new LinearLayout(this);item.setOrientation(LinearLayout.VERTICAL);list.addView(item);
+            String date=java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(row.optLong("due")));
+            item.addView(label(row.optString("text")+"\n"+date+" · "+(row.optBoolean("delivered")?"Сповіщено":"Очікує"),14));
+            Button remove=new Button(this);remove.setText("Видалити");item.addView(remove);remove.setOnClickListener(v->{MobileReminders.remove(this,row.optInt("id"));list.removeView(item);});
+        }};
+        add.setOnClickListener(v->{try{MobileReminders.add(this,text.getText().toString(),Integer.parseInt(minutes.getText().toString()));text.setText("");refresh.run();}catch(Exception e){text.setError(e.getMessage());}});
+        refresh.run();new AlertDialog.Builder(this).setTitle("Нагадування Hatoriel").setView(sv).setPositiveButton("Закрити",null).show();
     }
     private void refreshLocalModel(){try{java.io.File file=ModelImport.selected(this);localModelStatus.setText(file.isFile()?String.format(java.util.Locale.ROOT,"GGUF: %.2f GiB · імпортовано, запуск ще недоступний",file.length()/1073741824.0):"GGUF не імпортовано");}catch(java.io.IOException e){localModelStatus.setText(e.getMessage());}}
     @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);hardwareButton.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);hardwareButton.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
