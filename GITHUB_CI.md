@@ -1,0 +1,2 @@
+# Windows CI
+Create a private repository, upload the project including .github/workflows/windows.yml, then open Actions and run HATORI Windows CI. Download the artifact after a successful run. Commit the generated Cargo.lock from the artifact for reproducible dependency resolution. Ollama is required at runtime; CI does not test the GUI, tray, or model inference. Do not upload personal databases or secrets.
