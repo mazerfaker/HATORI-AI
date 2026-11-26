@@ -214,6 +214,9 @@ struct FoundationView: View {
                         LabeledContent("Нагадування та сповіщення", value: "\(reminders.data.reminders.count)")
                     }
                 }
+                Section("Перенесення між пристроями") {
+                    NavigationLink("Захищений пакет") { SyncView(chat: chat) }
+                }
                 Section("Довготривала пам’ять") {
                     NavigationLink {
                         MemoryView(chat: chat)
@@ -264,7 +267,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.5.6")
+                    Text("Crimson Core Minimal · 0.5.7")
                     Text("Rust Core " + coreVersion)
                 }
             }
