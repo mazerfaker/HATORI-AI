@@ -15,11 +15,18 @@ struct ChatEntry: Codable, Identifiable {
     @Published var status = "Налаштуй HTTPS-сервер для діалогу"
     @Published private(set) var endpoint = ""
     @Published private(set) var model = "qwen2.5:3b"
+    @Published private(set) var options = CoreOptions()
+    @Published private(set) var effectiveTraits: [UInt8] = CoreOptions().traits
     private var worker: Task<Void, Never>?
     private var generation: UUID?
     private let defaults = UserDefaults.standard
 
     init() {
+        if let data = defaults.data(forKey: "core.options"), data.count < 16384,
+           let stored = try? JSONDecoder().decode(CoreOptions.self, from: data) {
+            options = stored.validated
+            effectiveTraits = options.traits
+        }
         endpoint = defaults.string(forKey: "chat.endpoint") ?? ""
         model = defaults.string(forKey: "chat.model") ?? "qwen2.5:3b"
         if let data = defaults.data(forKey: "chat.history"), data.count <= 4_194_304,
@@ -37,6 +44,15 @@ struct ChatEntry: Codable, Identifiable {
         guard data.count <= 4_194_304 else { throw TransportFailure.tooLarge }
         defaults.set(data, forKey: "chat.history")
         history = entries
+    }
+    func configurePersonality(_ proposed: CoreOptions) {
+        guard !busy else { return }
+        options = proposed.validated
+        effectiveTraits = options.traits
+        persistOptions()
+    }
+    private func persistOptions() {
+        if let data = try? JSONEncoder().encode(options) { defaults.set(data, forKey: "core.options") }
     }
     func configure(endpoint: String, model: String) throws {
         guard !busy else { return }
@@ -86,13 +102,17 @@ struct ChatEntry: Codable, Identifiable {
         let source = replace == nil ? history : Array(history.dropLast())
         var context = source.suffix(32).map { CoreMessage(role: $0.role, content: $0.content) }
         while context.count > 1 && ((try? JSONEncoder().encode(context).count) ?? Int.max) > 240000 { context.removeFirst() }
-        let snapshot = context, server = endpoint, selectedModel = model, id = UUID()
+        let snapshot = CoreContext(history: context, options: options), server = endpoint, selectedModel = model, id = UUID()
         generation = id; busy = true; partial = ""; status = "Hatoriel думає…"
         worker = Task { [weak self] in
             do {
-                let prepared = try await Task.detached(priority: .userInitiated) { try NativeCore.prepare(snapshot) }.value
+                let prepared = try await Task.detached(priority: .userInitiated) { try NativeCore.prepareContext(snapshot) }.value
                 try Task.checkCancellation()
-                let reply = try await ChatTransport.generate(base: server, model: selectedModel, messages: prepared) { [weak self] text in
+                guard self?.generation == id else { return }
+                self?.options.mood = prepared.mood
+                self?.effectiveTraits = prepared.effective_traits
+                self?.persistOptions()
+                let reply = try await ChatTransport.generate(base: server, model: selectedModel, messages: prepared.messages) { [weak self] text in
                     guard let self, self.generation == id else { return }
                     self.partial = text
                 }
