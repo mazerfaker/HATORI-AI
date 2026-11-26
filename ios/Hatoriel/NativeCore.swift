@@ -94,4 +94,13 @@ enum NativeCore {
         }
         return try JSONDecoder().decode(MemorySuggestion?.self, from: Data(output.utf8))
     }
+    static func sync<T: Encodable, R: Decodable>(_ command: T, as type: R.Type) throws -> R {
+        let input = try JSONEncoder().encode(command)
+        let output = try input.withUnsafeBytes { buffer in
+            try consume(hatoriel_sync(buffer.bindMemory(to: UInt8.self).baseAddress, buffer.count))
+        }
+        let data = Data(output.utf8)
+        if let failure = try? JSONDecoder().decode([String: String].self, from: data), let error = failure["error"] { throw CoreFailure.rejected(error) }
+        return try JSONDecoder().decode(type, from: data)
+    }
 }
