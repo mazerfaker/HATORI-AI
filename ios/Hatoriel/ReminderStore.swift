@@ -84,7 +84,7 @@ struct ReminderPreferences: Codable {
         await reconcile()
     }
     func saveSettings(enabled: Bool, quiet: Bool, sound: Bool, showText: Bool, checkIn: Bool, minutes: Int) async {
-        await change {
+        await change(force: true) {
             $0.enabled = enabled; $0.quiet = quiet; $0.sound = sound; $0.showText = showText
             $0.checkIn = checkIn; $0.checkInMinutes = min(1440,max(60,minutes))
         }
@@ -100,14 +100,14 @@ struct ReminderPreferences: Codable {
         }
     }
     func remove(_ id: UUID) async { await change { $0.reminders.removeAll { $0.id == id } } }
-    private func change(_ edit: (inout ReminderPreferences) throws -> Void) async {
+    private func change(force: Bool = false, _ edit: (inout ReminderPreferences) throws -> Void) async {
         guard !working, storageError == nil else { return }
         working = true; defer { working = false }
         do {
             var proposed = data
             try edit(&proposed)
             try persist(proposed)
-            await reconcile(force: true)
+            await reconcile(force: force)
         } catch { status = error.localizedDescription }
     }
     private func content(_ text: String, checkIn: Bool = false) -> UNMutableNotificationContent {
@@ -119,7 +119,7 @@ struct ReminderPreferences: Codable {
         return c
     }
     private func reconcile(force: Bool = false) async {
-        authorization = await center.notificationSettings().authorizationStatus
+        authorization = (await center.notificationSettings()).authorizationStatus
         let requests = await center.pendingNotificationRequests()
         let ours = requests.filter { $0.identifier.hasPrefix(Self.prefix) }
         if storageError != nil {
@@ -135,9 +135,9 @@ struct ReminderPreferences: Codable {
         let future = data.reminders.filter { $0.due > Date() }
         var desired = Set(future.map { Self.prefix + $0.id.uuidString })
         if data.checkIn { desired.insert(Self.checkInID) }
-        let stale = ours.filter { !desired.contains($0.identifier) || force }
+        let stale = ours.filter { !desired.contains($0.identifier) }
         center.removePendingNotificationRequests(withIdentifiers: stale.map(\.identifier))
-        let existing = Set(ours.map(\.identifier)).subtracting(stale.map(\.identifier))
+        let existing = force ? Set<String>() : Set(ours.map(\.identifier)).subtracting(stale.map(\.identifier))
         var failures = 0
         for row in future {
             let id = Self.prefix + row.id.uuidString
@@ -153,7 +153,7 @@ struct ReminderPreferences: Codable {
             do { try await center.add(UNNotificationRequest(identifier: Self.checkInID, content: content("", checkIn: true), trigger: trigger)) }
             catch { failures += 1 }
         }
-        pending = Set(await center.pendingNotificationRequests().filter { $0.identifier.hasPrefix(Self.prefix) }.map(\.identifier))
+        pending = Set((await center.pendingNotificationRequests()).filter { $0.identifier.hasPrefix(Self.prefix) }.map(\.identifier))
         status = failures == 0 ? "Заплановано: \(pending.count)" : "Не вдалося запланувати: \(failures). Повтори перевірку."
     }
     func isScheduled(_ row: IOSReminder) -> Bool { pending.contains(Self.prefix + row.id.uuidString) }
