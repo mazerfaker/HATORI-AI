@@ -10,7 +10,10 @@ import android.widget.*;
 import org.json.*;
 
 public final class MainActivity extends Activity {
-    private final int accent=0xffce8297;
+    private final int accent=CrimsonAvatar.RED;
+    private CrimsonAvatar avatar;
+    private ScrollView settingsScroll;
+    private LinearLayout composer;
     private TextView draftView;
     private Button retry;
     private String draftText="";
@@ -36,7 +39,7 @@ public final class MainActivity extends Activity {
     private Button hardwareButton;
     private Thread importWorker;
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
-    private TextView label(String value,int size){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setTextColor(0xfff4f0f2);return t;}
+    private TextView label(String value,int size){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setTextColor(0xfff2f2f2);return t;}
     private EditText field(String value,String hint){EditText e=new EditText(this);e.setText(value);e.setHint(hint);e.setSingleLine(true);return e;}
     private void append(String role,String content)throws JSONException{
         history.put(new JSONObject().put("role",role).put("content",content));
@@ -45,14 +48,15 @@ public final class MainActivity extends Activity {
     }
     private void render(){
         messages.removeAllViews();
+        if(history.length()==0&&active==null){CrimsonAvatar welcome=new CrimsonAvatar(this);messages.addView(welcome,new LinearLayout.LayoutParams(-1,dp(160)));TextView greeting=label("Готова до діалогу",20);greeting.setGravity(android.view.Gravity.CENTER);messages.addView(greeting);TextView hint=label("Чим можу допомогти?",14);hint.setGravity(android.view.Gravity.CENTER);messages.addView(hint);}
         for(int i=0;i<history.length();i++){
             JSONObject m=history.optJSONObject(i);if(m==null)continue;
             boolean user="user".equals(m.optString("role"));
-            TextView who=label(user?"ТИ":"HATORIEL",12);who.setTextColor(user?0xffb5aab0:accent);messages.addView(who);
-            TextView body=label(m.optString("content"),16);body.setTextIsSelectable(true);body.setPadding(dp(12),dp(10),dp(12),dp(10));android.graphics.drawable.GradientDrawable shape=new android.graphics.drawable.GradientDrawable();shape.setColor(user?0xff39212b:0xff161417);shape.setCornerRadius(dp(12));body.setBackground(shape);body.setOnLongClickListener(v->{android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Hatoriel",m.optString("content")));Toast.makeText(this,"Скопійовано",Toast.LENGTH_SHORT).show();return true;});
+            TextView who=label(user?"ТИ":"HATORIEL",12);who.setTextColor(user?0xffbcbcbc:accent);messages.addView(who);
+            TextView body=label(m.optString("content"),16);body.setTextIsSelectable(true);body.setPadding(dp(12),dp(10),dp(12),dp(10));android.graphics.drawable.GradientDrawable shape=new android.graphics.drawable.GradientDrawable();shape.setColor(user?0xff352526:0xff2b2b2e);shape.setCornerRadius(dp(12));body.setBackground(shape);body.setOnLongClickListener(v->{android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Hatoriel",m.optString("content")));Toast.makeText(this,"Скопійовано",Toast.LENGTH_SHORT).show();return true;});
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(12);messages.addView(body,lp);
         }
-        draftView=label(draftText,16);draftView.setTextColor(0xfff4f0f2);draftView.setPadding(dp(12),dp(10),dp(12),dp(10));draftView.setBackgroundColor(0xff161417);draftView.setVisibility(active==null?View.GONE:View.VISIBLE);messages.addView(draftView);
+        draftView=label(draftText,16);draftView.setTextColor(0xfff2f2f2);draftView.setPadding(dp(12),dp(10),dp(12),dp(10));draftView.setBackgroundColor(0xff2b2b2e);draftView.setVisibility(active==null?View.GONE:View.VISIBLE);messages.addView(draftView);
         scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
     }
     private void busy(boolean value){send.setEnabled(ready&&!value);stop.setEnabled(value);clear.setEnabled(!value);memoryButton.setEnabled(!value);hardwareButton.setEnabled(!value&&!importing);retry.setEnabled(ready&&!value&&history.length()>0);endpoint.setEnabled(!value);modelField.setEnabled(!value);bridgeKeyField.setEnabled(!value);importModel.setEnabled(!value&&!importing);}
@@ -61,21 +65,29 @@ public final class MainActivity extends Activity {
         prefs=getSharedPreferences("hatoriel_chat",MODE_PRIVATE);memory=new MobileMemory(prefs);
         base=prefs.getString("endpoint","http://127.0.0.1:11434");model=prefs.getString("model","qwen2.5:3b");
         try{history=new JSONArray(prefs.getString("history","[]"));}catch(JSONException ignored){history=new JSONArray();}
-        LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(0xff09090b);
+        LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(0xff1c1c1e);
         root.setPadding(dp(14),dp(12),dp(14),dp(12));
         root.setOnApplyWindowInsetsListener((v,insets)->{if(android.os.Build.VERSION.SDK_INT>=30){android.graphics.Insets bars=insets.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.ime());v.setPadding(dp(14)+bars.left,dp(12)+bars.top,dp(14)+bars.right,dp(12)+bars.bottom);}return insets;});
         if(android.os.Build.VERSION.SDK_INT<30)root.setFitsSystemWindows(true);
-        TextView title=label("HATORIEL  /  MOBILE",24);title.setTextColor(0xfff4f0f2);root.addView(title);
-        status=label("Ініціалізація…",12);status.setTextColor(0xffb5aab0);root.addView(status);
-        Button config=new Button(this);config.setText("Налаштування підключення");root.addView(config);memoryButton=new Button(this);memoryButton.setText("Пам’ять та профіль");root.addView(memoryButton);memoryButton.setOnClickListener(v->showMemory());hardwareButton=new Button(this);hardwareButton.setText("Обладнання та моделі");root.addView(hardwareButton);hardwareButton.setOnClickListener(v->showHardware());Button reminders=new Button(this);reminders.setText("Нагадування");root.addView(reminders);reminders.setOnClickListener(v->showReminders());
-        settings=new LinearLayout(this);settings.setOrientation(LinearLayout.VERTICAL);settings.setVisibility(View.GONE);root.addView(settings);
+        LinearLayout header=new LinearLayout(this);header.setOrientation(LinearLayout.HORIZONTAL);header.setGravity(android.view.Gravity.CENTER_VERTICAL);root.addView(header);
+        avatar=new CrimsonAvatar(this);header.addView(avatar,new LinearLayout.LayoutParams(dp(56),dp(56)));
+        LinearLayout brand=new LinearLayout(this);brand.setOrientation(LinearLayout.VERTICAL);header.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
+        TextView title=label("H A T O R I E L",20);title.setTypeface(null,android.graphics.Typeface.BOLD);brand.addView(title);
+        TextView edition=label("CRIMSON CORE",11);edition.setTextColor(accent);brand.addView(edition);
+        status=label("Ініціалізація…",12);status.setTextColor(0xffbcbcbc);root.addView(status);
+        Button config=new Button(this);config.setText("Налашт.");
+        memoryButton=new Button(this);memoryButton.setText("Пам’ять");memoryButton.setOnClickListener(v->showMemory());
+        hardwareButton=new Button(this);hardwareButton.setText("Моделі");hardwareButton.setOnClickListener(v->showHardware());
+        Button reminders=new Button(this);reminders.setText("Завдання");reminders.setOnClickListener(v->showReminders());
+        settingsScroll=new ScrollView(this);settingsScroll.setVisibility(View.GONE);
+        settings=new LinearLayout(this);settings.setOrientation(LinearLayout.VERTICAL);settingsScroll.addView(settings);root.addView(settingsScroll,new LinearLayout.LayoutParams(-1,0,1));
         endpoint=field(base,"URL Ollama-сервера");modelField=field(model,"Назва моделі");settings.addView(endpoint);settings.addView(modelField);bridgeKeyField=field(base.equals(bridgeEndpoint)?bridgeKey:"","Ключ сеансу Hatoriel (необов’язково)");bridgeKeyField.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);settings.addView(bridgeKeyField);settings.addView(label("Для шлюзу ПК потрібен HTTPS і ключ із розділу «Пристрої». Ключ зберігається лише в оперативній пам’яті до завершення процесу.",12));
         settings.addView(label("HTTP дозволено лише на цьому телефоні. HTTPS — для явно вибраного сервера. Історія надсилається на вибраний сервер.",12));
         Button save=new Button(this);save.setText("Зберегти підключення");settings.addView(save);
-        config.setOnClickListener(v->settings.setVisibility(settings.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE));
+        config.setOnClickListener(v->showSettings(settingsScroll.getVisibility()!=View.VISIBLE));
         save.setOnClickListener(v->{if(GenerationSession.active!=null)return;String b=endpoint.getText().toString().trim(),m=modelField.getText().toString().trim(),key=bridgeKeyField.getText().toString().trim();
             try{java.net.URL url=ChatTransport.endpoint(b);if(!key.isEmpty()&&(!"https".equalsIgnoreCase(url.getProtocol())||!key.matches("[0-9a-f]{64}")))throw new IllegalArgumentException("Для ключа потрібен HTTPS та 64 hex-символи");if(m.isEmpty())throw new IllegalArgumentException("Вкажи модель");
-                new AlertDialog.Builder(this).setTitle("Підтвердити сервер").setMessage("Повідомлення, частина історії та, якщо дозволено, профіль і релевантні спогади надсилатимуться на "+b+". Продовжити?").setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{if(!base.equals(b))memory.setEnabled(false);base=b;model=m;bridgeKey=key;bridgeEndpoint=key.isEmpty()?"":b;prefs.edit().putString("endpoint",b).putString("model",m).apply();settings.setVisibility(View.GONE);status.setText("Сервер налаштовано (ще не перевірено)");}).show();
+                new AlertDialog.Builder(this).setTitle("Підтвердити сервер").setMessage("Повідомлення, частина історії та, якщо дозволено, профіль і релевантні спогади надсилатимуться на "+b+". Продовжити?").setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{if(!base.equals(b))memory.setEnabled(false);base=b;model=m;bridgeKey=key;bridgeEndpoint=key.isEmpty()?"":b;prefs.edit().putString("endpoint",b).putString("model",m).apply();showSettings(false);status.setText("Сервер налаштовано (ще не перевірено)");}).show();
             }catch(Exception e){status.setText(e.getMessage());}});
         localModelStatus=label("Локальна модель: підготовка runtime",12);settings.addView(localModelStatus);
         importModel=new Button(this);importModel.setText("Імпортувати GGUF");settings.addView(importModel);
@@ -87,12 +99,16 @@ public final class MainActivity extends Activity {
         clear=new Button(this);clear.setText("Очистити історію");settings.addView(clear);
         clear.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну історію?").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(GenerationSession.active==null){history=new JSONArray();prefs.edit().remove("history").apply();render();busy(false);}}).show());
         scroll=new ScrollView(this);messages=new LinearLayout(this);messages.setOrientation(LinearLayout.VERTICAL);scroll.addView(messages);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-        input=new EditText(this);input.setHint("Напиши повідомлення…");input.setMinLines(2);input.setMaxLines(4);root.addView(input);
-        LinearLayout buttons=new LinearLayout(this);send=new Button(this);send.setText("Надіслати");stop=new Button(this);stop.setText("Зупинити");buttons.addView(send,new LinearLayout.LayoutParams(0,-2,1));buttons.addView(stop,new LinearLayout.LayoutParams(0,-2,1));root.addView(buttons);send.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xff68263a));retry=new Button(this);retry.setText("Повторити останній запит");root.addView(retry);retry.setOnClickListener(v->retryLast());
+        composer=new LinearLayout(this);composer.setOrientation(LinearLayout.VERTICAL);root.addView(composer);input=new EditText(this);input.setHint("Напиши повідомлення…");input.setMinLines(1);input.setMaxLines(4);composer.addView(input);
+        LinearLayout buttons=new LinearLayout(this);send=new Button(this);send.setText("Надіслати");stop=new Button(this);stop.setText("Зупинити");buttons.addView(send,new LinearLayout.LayoutParams(0,-2,1));buttons.addView(stop,new LinearLayout.LayoutParams(0,-2,1));composer.addView(buttons);send.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xffa81920));retry=new Button(this);retry.setText("Повторити останній запит");composer.addView(retry);retry.setOnClickListener(v->retryLast());
+        LinearLayout nav=new LinearLayout(this);nav.setOrientation(LinearLayout.HORIZONTAL);nav.setBackgroundColor(0xff242426);root.addView(nav);
+        Button chat=new Button(this);chat.setText("Чат");chat.setOnClickListener(v->showSettings(false));
+        for(Button btn:new Button[]{chat,memoryButton,hardwareButton,reminders,config}){btn.setTextSize(11);btn.setAllCaps(false);btn.setMinWidth(0);btn.setMinimumWidth(0);btn.setPadding(0,0,0,0);nav.addView(btn,new LinearLayout.LayoutParams(0,dp(52),1));}
         try{status.setText("Rust Core "+NativeCore.version()+" · "+base);ready=true;}catch(LinkageError e){status.setText("Rust Core недоступне: "+e.getMessage());}
         send.setOnClickListener(v->generate());stop.setOnClickListener(v->{GenerationSession.cancel();syncSession();});
         setContentView(root);root.requestApplyInsets();render();busy(false);syncSession();MobileReminders.channel(this);
     }
+    private void showSettings(boolean visible){settingsScroll.setVisibility(visible?View.VISIBLE:View.GONE);scroll.setVisibility(visible?View.GONE:View.VISIBLE);composer.setVisibility(visible?View.GONE:View.VISIBLE);}
     private void generate(){
         String query=input.getText().toString().trim();if(!ready||GenerationSession.active!=null||query.isEmpty())return;
         if(query.codePointCount(0,query.length())>12000){status.setText("Максимум 12000 символів");return;}
@@ -131,7 +147,7 @@ public final class MainActivity extends Activity {
         if(sessionRevision==GenerationSession.revision)return;
         sessionRevision=GenerationSession.revision;
         ChatTransport previous=active;active=GenerationSession.active;
-        draftText=GenerationSession.partial;
+        draftText=GenerationSession.partial;avatar.setBusy(active!=null);
         if(previous!=active||active==null){
             try{history=new JSONArray(prefs.getString("history","[]"));}catch(JSONException ignored){}
             render();busy(active!=null);
