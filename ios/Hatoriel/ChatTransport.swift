@@ -33,6 +33,50 @@ enum ChatTransport {
         return url
     }
 
+    static func validateKey(_ key: String) throws {
+        guard key.utf8.count == 64, key.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw CoreFailure.rejected("Потрібен ключ сеансу: 64 символи 0–9 або a–f.")
+        }
+    }
+    struct BridgeStatus: Decodable {
+        let service: String
+        let `protocol`: Int
+        let model: String
+        let backend: String
+    }
+    static func probe(base: String, key: String) async throws -> BridgeStatus {
+        try validateKey(key)
+        let chatURL = try endpoint(base)
+        guard var c = URLComponents(url: chatURL, resolvingAgainstBaseURL: false) else { throw TransportFailure.invalidEndpoint }
+        c.path = "/api/status"
+        guard let url = c.url else { throw TransportFailure.invalidEndpoint }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 15
+        config.httpShouldSetCookies = false
+        config.urlCache = nil
+        config.urlCredentialStorage = nil
+        let session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw TransportFailure.incomplete }
+        guard http.statusCode == 200 else { throw TransportFailure.http(http.statusCode) }
+        var data = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < 4096 else { throw TransportFailure.tooLarge }
+            data.append(byte)
+        }
+        let info = try JSONDecoder().decode(BridgeStatus.self, from: data)
+        guard info.service == "hatoriel-desktop", info.protocol == 1, info.backend == "ollama" else {
+            throw CoreFailure.rejected("Несумісний шлюз Hatoriel.")
+        }
+        return info
+    }
     private struct Payload: Encodable {
         let model: String
         let messages: [CoreMessage]
@@ -45,15 +89,17 @@ enum ChatTransport {
         let error: String?
     }
 
-    static func generate(base: String, model: String, messages: [CoreMessage], onPartial: @escaping @MainActor (String) -> Void) async throws -> String {
+    static func generate(base: String, model: String, messages: [CoreMessage], sessionKey: String = "", onPartial: @escaping @MainActor (String) -> Void) async throws -> String {
         let url = try endpoint(base)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !sessionKey.isEmpty { try validateKey(sessionKey); request.setValue("Bearer " + sessionKey, forHTTPHeaderField: "Authorization") }
         let body = try JSONEncoder().encode(Payload(model: model, messages: messages))
         guard body.count <= 262144 else { throw TransportFailure.tooLarge }
         request.httpBody = body
         let config = URLSessionConfiguration.ephemeral
+        config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 120
         config.timeoutIntervalForResource = 300
         config.httpShouldSetCookies = false
