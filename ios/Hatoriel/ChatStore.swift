@@ -91,7 +91,18 @@ struct ChatEntry: Codable, Identifiable {
     }
     func reloadMemory() {
         guard !busy else { return }
-        do { memory = try MemoryVault.load(); memoryError = nil }
+        do {
+            var loaded = try MemoryVault.load()
+            if let stored = loaded.personality {
+                options = stored.validated
+            } else {
+                // Migrate legacy UserDefaults settings only after a successful atomic write.
+                loaded.personality = options.validated
+                try loaded.persist()
+            }
+            memory = loaded; effectiveTraits = options.traits; memoryError = nil
+            defaults.removeObject(forKey: "core.options")
+        }
         catch { memoryError = "Пам’ять недоступна: " + error.localizedDescription }
     }
     private func updateMemory(_ change: (inout MemoryVault) throws -> Void) throws {
@@ -133,18 +144,31 @@ struct ChatEntry: Codable, Identifiable {
         try updateMemory { vault in
             for row in plan.additions { try vault.save(id: nil, content: row.content, category: row.category, importance: row.importance) }
             if profile { try vault.setProfile(plan.profile) }
+            if personality { vault.personality = plan.options.validated }
             vault.approvedEndpoint = nil
         }
-        if personality { configurePersonality(plan.options) }
+        if personality, let stored = memory.personality {
+            options = stored; effectiveTraits = stored.traits
+        }
     }
     func configurePersonality(_ proposed: CoreOptions) {
-        guard !busy else { return }
-        options = proposed.validated
-        effectiveTraits = options.traits
-        persistOptions()
+        do {
+            let validated = proposed.validated
+            try updateMemory { $0.personality = validated }
+            options = validated; effectiveTraits = options.traits
+            status = "Особистість збережено"
+        } catch { status = error.localizedDescription }
     }
-    private func persistOptions() {
-        if let data = try? JSONEncoder().encode(options) { defaults.set(data, forKey: "core.options") }
+    private func persistMood(_ mood: CoreMood, effective: [UInt8]) {
+        // The active generation cannot use updateMemory, which intentionally rejects busy edits.
+        guard memoryError == nil else { return }
+        var proposed = memory
+        var next = options; next.mood = mood; next = next.validated
+        proposed.personality = next
+        do {
+            try proposed.persist()
+            memory = proposed; options = next; effectiveTraits = effective
+        } catch { memoryError = "Не вдалося зберегти стан: " + error.localizedDescription }
     }
     func configure(endpoint: String, model: String, desktop: Bool, key: String) throws {
         guard !busy && !checkingConnection else { throw CoreFailure.rejected("Зачекай завершення поточної операції.") }
@@ -233,9 +257,7 @@ struct ChatEntry: Codable, Identifiable {
                 let prepared = try await Task.detached(priority: .userInitiated) { try NativeCore.prepareContext(snapshot) }.value
                 try Task.checkCancellation()
                 guard self?.generation == id else { return }
-                self?.options.mood = prepared.mood
-                self?.effectiveTraits = prepared.effective_traits
-                self?.persistOptions()
+                self?.persistMood(prepared.mood, effective: prepared.effective_traits)
                 let update: @MainActor (String) -> Void = { [weak self] text in
                     guard let self, self.generation == id else { return }
                     self.partial = text
