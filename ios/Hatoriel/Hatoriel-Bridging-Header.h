@@ -6,5 +6,6 @@
 char *hatoriel_version(void);
 char *hatoriel_prepare(const uint8_t *data, size_t len);
 char *hatoriel_prepare_context(const uint8_t *data, size_t len);
+char *hatoriel_suggest_memory(const uint8_t *data, size_t len);
 void hatoriel_free(char *value);
 #endif
