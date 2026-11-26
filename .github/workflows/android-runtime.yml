@@ -1,0 +1,30 @@
+name: Hatoriel Android Runtime Preview
+on:
+  push:
+    branches: [main]
+    paths: ['android/runtime/**', '.github/workflows/android-runtime.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: hatoriel-android-runtime-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install NDK
+        run: sdkmanager "ndk;27.2.12479018"
+      - name: Build ARM64 runtime
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          bash android/runtime/build-llama.sh
+      - uses: actions/upload-artifact@v5
+        with:
+          name: Hatoriel-Android-Llama-Runtime-Preview
+          path: android/runtime/out/
+          if-no-files-found: error
