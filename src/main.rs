@@ -2,16 +2,12 @@
 use eframe::egui::{self, Color32, RichText};
 mod presence;
 mod sound;
-mod personality;
 mod hardware;
-mod model_manager;
 mod autostart;
-mod memory_core;
+use hatori_ai::{personality, memory_core, model_manager, inference::{Backend, Ollama, Message}};
 use serde::{Serialize, Deserialize};
-use std::{sync::mpsc, io::{BufRead, BufReader}, time::Duration};
+use std::{sync::mpsc, time::Duration};
 use rusqlite::{Connection, params};
-#[derive(Clone, Serialize, Deserialize)]
-struct Message { role: String, content: String }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Config { model: String, traits: [u8;7], mode: String, english: bool, avatar: bool, minimize_to_tray: bool, dark: bool, sound: bool, volume: u8, setup_complete: bool }
@@ -32,10 +28,10 @@ fn new(cc:&eframe::CreationContext<'_>)->Self {
 fn save(&mut self){if let Some(d)=&self.db {if let Err(e)=d.execute("INSERT OR REPLACE INTO config VALUES(1,?1)",[serde_json::to_string(&self.config).unwrap_or_default()]){self.status=e.to_string();}}}
 fn add(&mut self,role:&str,content:String){if let Some(d)=&self.db{if let Err(e)=d.execute("INSERT INTO messages(role,content) VALUES(?1,?2)",params![role,&content]){self.status=e.to_string();}} self.messages.push(Message{role:role.into(),content});}
 fn send(&mut self){if self.busy||self.input.trim().is_empty(){return;} let input=std::mem::take(&mut self.input); let relevant=memory_core::relevant(&input,&self.memories); self.add("user",input); self.busy=true; self.draft.clear(); self.status="Generating…".into(); let tx=self.tx.clone(); let cfg=self.config.clone(); let mut messages=vec![Message{role:"system".into(),content:personality::prompt(&cfg.mode,cfg.traits,&relevant)}]; messages.extend(self.messages.iter().rev().take(16).cloned().collect::<Vec<_>>().into_iter().rev());
- std::thread::spawn(move||{let result=(||->Result<(),Box<dyn std::error::Error>>{let client=reqwest::blocking::Client::builder().connect_timeout(Duration::from_secs(4)).timeout(Duration::from_secs(300)).build()?; let response=client.post("http://127.0.0.1:11434/api/chat").json(&serde_json::json!({"model":cfg.model,"messages":messages,"stream":true})).send()?.error_for_status()?; for line in BufReader::new(response).lines(){let v:serde_json::Value=serde_json::from_str(&line?)?; if let Some(e)=v["error"].as_str(){return Err(e.to_owned().into());} if let Some(s)=v["message"]["content"].as_str(){let _=tx.send(Event::Token(s.into()));} if v["done"].as_bool()==Some(true){return Ok(());}} Err("Stream ended prematurely".into())})(); let _=tx.send(match result{Ok(())=>Event::Done,Err(e)=>Event::Error(e.to_string())});});
+ std::thread::spawn(move||{let result=Ollama.generate(&cfg.model,&messages,&mut |token|{let _=tx.send(Event::Token(token));});let _=tx.send(match result{Ok(())=>Event::Done,Err(e)=>Event::Error(e)});});
 }
 fn pull(&mut self){if self.pulling||self.busy||self.config.model.trim().is_empty(){return;} self.pulling=true;self.pull_progress=None;self.pull_status="Connecting…".into();let model=self.config.model.trim().to_owned();let tx=self.tx.clone();std::thread::spawn(move||{let result=model_manager::pull(&model,|status,progress|{let _=tx.send(Event::PullProgress(status,progress));}).map_err(|e|e.to_string());let _=tx.send(Event::PullDone(result));});}
-fn refresh(&self){let tx=self.tx.clone(); std::thread::spawn(move||{let result=(||->Result<Vec<String>,Box<dyn std::error::Error>>{let v:serde_json::Value=reqwest::blocking::Client::builder().timeout(Duration::from_secs(5)).build()?.get("http://127.0.0.1:11434/api/tags").send()?.error_for_status()?.json()?; Ok(v["models"].as_array().into_iter().flatten().filter_map(|m|m["name"].as_str().map(str::to_owned)).collect())})();let _=tx.send(match result{Ok(m)=>Event::Models(m),Err(e)=>Event::ModelError(e.to_string())});});}
+fn refresh(&self){let tx=self.tx.clone();std::thread::spawn(move||{let _=tx.send(match Ollama.models(){Ok(m)=>Event::Models(m),Err(e)=>Event::ModelError(e)});});}
 }
 impl eframe::App for App {fn update(&mut self,ctx:&egui::Context,_:&mut eframe::Frame){
  if ctx.style().visuals.dark_mode != self.config.dark {ctx.set_visuals(if self.config.dark {egui::Visuals::dark()} else {egui::Visuals::light()});}
