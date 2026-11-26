@@ -24,7 +24,9 @@ jobs:
           cargo test --no-default-features --lib
           cargo test --manifest-path ios/native/Cargo.toml --lib
       - name: Build XCFramework
-        run: bash ios/build-core.sh
+        run: |
+          bash ios/runtime/build.sh
+          bash ios/build-core.sh
       - name: Generate Xcode project
         run: cd ios && xcodegen generate
       - name: Build simulator app
@@ -41,6 +43,8 @@ jobs:
           ditto -c -k --keepParent ios/build/derived-sim/Build/Products/Debug-iphonesimulator/Hatoriel.app ios/build/artifacts/Hatoriel-iOS-Simulator.zip
           ditto -c -k --keepParent ios/build/derived-device/Build/Products/Debug-iphoneos/Hatoriel.app ios/build/artifacts/Hatoriel-iOS-Unsigned.zip
           ditto -c -k --keepParent ios/build/HatorielCore.xcframework ios/build/artifacts/HatorielCore.xcframework.zip
+          ditto -c -k --keepParent ios/build/HatorielLocal.xcframework ios/build/artifacts/HatorielLocal.xcframework.zip
+          cp ios/build/llama-LICENSE.txt ios/build/artifacts/
       - uses: actions/upload-artifact@v5
         with:
           name: Hatoriel-iOS-Foundation
