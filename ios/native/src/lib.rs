@@ -30,3 +30,13 @@ pub unsafe extern "C" fn hatoriel_free(value:*mut c_char){if !value.is_null(){dr
  #[test]fn invalid(){assert!(prepare(b"[]").is_err());assert!(prepare(b"[{\"role\":\"system\",\"content\":\"x\"}]").is_err());}
  #[test]fn ownership(){unsafe{let p=hatoriel_version();assert!(!p.is_null());assert_eq!(std::ffi::CStr::from_ptr(p).to_str().unwrap(),env!("CARGO_PKG_VERSION"));hatoriel_free(p);hatoriel_free(ptr::null_mut());}}
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn hatoriel_prepare_context(data:*const u8,len:usize)->*mut c_char{
+ let result=std::panic::catch_unwind(||->Result<String,String>{
+ if data.is_null()||len==0||len>1024*1024{return Err("Invalid context buffer".into());}
+ let output=hatori_ai::mobile_context::prepare_json(unsafe{std::slice::from_raw_parts(data,len)},hatori_ai::emotion::now())?;
+ serde_json::to_string(&output).map_err(|e|e.to_string())
+ });
+ owned(match result{Ok(Ok(s))=>s,Ok(Err(e))=>serde_json::json!({"error":e}).to_string(),Err(_)=>serde_json::json!({"error":"Native core failure"}).to_string()})
+}
