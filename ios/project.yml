@@ -5,8 +5,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.5.8"
-    CURRENT_PROJECT_VERSION: "59"
+    MARKETING_VERSION: "0.5.9"
+    CURRENT_PROJECT_VERSION: "60"
 targets:
   Hatoriel:
     type: application
@@ -28,6 +28,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Hatoriel
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: 'Hatoriel connects to your chosen AI server on the local network.'
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         SWIFT_OBJC_BRIDGING_HEADER: Hatoriel/Hatoriel-Bridging-Header.h
         OTHER_LDFLAGS: ["$(inherited)", "-lresolv", "-liconv", "-lc++", "-framework", "Security", "-framework", "SystemConfiguration"]

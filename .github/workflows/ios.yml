@@ -25,11 +25,12 @@ jobs:
           cargo test --manifest-path ios/native/Cargo.toml --lib
       - name: Build XCFramework
         run: |
-          bash ios/runtime/build.sh
-          bash ios/build-core.sh
+          set -o pipefail
+          mkdir -p ios/build
+          bash ios/runtime/build.sh 2>&1 | tee ios/build/runtime-build.log
+          bash ios/build-core.sh 2>&1 | tee ios/build/rust-build.log
       - name: Generate Crimson Core icon and Xcode project
         run: |
-          python3 ios/generate-icon.py
           cd ios && xcodegen generate
       - name: Build simulator app
         run: |

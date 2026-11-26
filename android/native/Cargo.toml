@@ -1,6 +1,6 @@
 [package]
 name = "hatoriel_android"
-version = "0.5.7+hotfix.1"
+version = "0.5.9"
 edition = "2021"
 
 [lib]
