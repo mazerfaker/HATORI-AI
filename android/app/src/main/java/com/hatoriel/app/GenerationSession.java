@@ -14,12 +14,13 @@ final class GenerationSession {
     static String partial="",status="";
     static boolean background;
     static long revision,job;
-    static void start(Context context,String data,String server,String model,String sessionKey,boolean keepRunning){
+    static void start(Context context,String data,String server,String model,String sessionKey,boolean keepRunning,String replaceExpected){
         if(active!=null)throw new IllegalStateException("Generation already active");
         Context app=context.getApplicationContext();
         ChatTransport transport=new ChatTransport();active=transport;background=keepRunning;
         long id=++job;partial="";status="Hatoriel думає…";revision++;
-        MAIN.postDelayed(()->{if(active==transport){status="Ліміт часу генерації";transport.cancel();revision++;}},300000);
+        final Runnable deadline=()->{if(active==transport){status="Ліміт часу генерації";transport.cancel();revision++;}};
+        MAIN.postDelayed(deadline,300000);
         new Thread(()->{
             String reply=null,error=null;
             try{
@@ -34,12 +35,14 @@ final class GenerationSession {
             }catch(Exception|LinkageError e){error=e.getMessage()==null?e.toString():e.getMessage();}
             final String result=reply,failure=error;
             MAIN.post(()->{
+                MAIN.removeCallbacks(deadline);
                 if(active!=transport||job!=id)return;
-                if(transport.isCancelled())status="Зупинено";
+                if(transport.isCancelled()){if(!"Ліміт часу генерації".equals(status))status="Зупинено";}
                 else if(failure!=null)status="Помилка: "+failure;
                 else try{
                     SharedPreferences prefs=app.getSharedPreferences("hatoriel_chat",Context.MODE_PRIVATE);
                     JSONArray rows=new JSONArray(prefs.getString("history","[]"));
+                    if(replaceExpected!=null){JSONObject last=rows.optJSONObject(rows.length()-1);if(last==null||!"assistant".equals(last.optString("role"))||!replaceExpected.equals(last.optString("content")))throw new IllegalStateException("Історія змінилася; попередню відповідь збережено");rows.remove(rows.length()-1);}
                     rows.put(new JSONObject().put("role","assistant").put("content",result));
                     while(rows.length()>100)rows.remove(0);
                     if(!prefs.edit().putString("history",rows.toString()).commit())throw new IllegalStateException("Не вдалося зберегти відповідь");
