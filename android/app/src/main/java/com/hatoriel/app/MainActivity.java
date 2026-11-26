@@ -73,9 +73,9 @@ public final class MainActivity extends Activity {
         settings.addView(label("HTTP дозволено лише на цьому телефоні. HTTPS — для явно вибраного сервера. Історія надсилається на вибраний сервер.",12));
         Button save=new Button(this);save.setText("Зберегти підключення");settings.addView(save);
         config.setOnClickListener(v->settings.setVisibility(settings.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE));
-        save.setOnClickListener(v->{if(active!=null)return;String b=endpoint.getText().toString().trim(),m=modelField.getText().toString().trim(),key=bridgeKeyField.getText().toString().trim();
+        save.setOnClickListener(v->{if(GenerationSession.active!=null)return;String b=endpoint.getText().toString().trim(),m=modelField.getText().toString().trim(),key=bridgeKeyField.getText().toString().trim();
             try{java.net.URL url=ChatTransport.endpoint(b);if(!key.isEmpty()&&(!"https".equalsIgnoreCase(url.getProtocol())||!key.matches("[0-9a-f]{64}")))throw new IllegalArgumentException("Для ключа потрібен HTTPS та 64 hex-символи");if(m.isEmpty())throw new IllegalArgumentException("Вкажи модель");
-                new AlertDialog.Builder(this).setTitle("Підтвердити сервер").setMessage("Повідомлення, частина історії та, якщо дозволено, профіль і релевантні спогади надсилатимуться на "+b+". Продовжити?").setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{base=b;model=m;bridgeKey=key;bridgeEndpoint=key.isEmpty()?"":b;prefs.edit().putString("endpoint",b).putString("model",m).apply();settings.setVisibility(View.GONE);status.setText("Сервер налаштовано (ще не перевірено)");}).show();
+                new AlertDialog.Builder(this).setTitle("Підтвердити сервер").setMessage("Повідомлення, частина історії та, якщо дозволено, профіль і релевантні спогади надсилатимуться на "+b+". Продовжити?").setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{if(!base.equals(b))memory.setEnabled(false);base=b;model=m;bridgeKey=key;bridgeEndpoint=key.isEmpty()?"":b;prefs.edit().putString("endpoint",b).putString("model",m).apply();settings.setVisibility(View.GONE);status.setText("Сервер налаштовано (ще не перевірено)");}).show();
             }catch(Exception e){status.setText(e.getMessage());}});
         localModelStatus=label("Локальна модель: підготовка runtime",12);settings.addView(localModelStatus);
         importModel=new Button(this);importModel.setText("Імпортувати GGUF");settings.addView(importModel);
@@ -85,7 +85,7 @@ public final class MainActivity extends Activity {
         background.setOnCheckedChangeListener((b,value)->{prefs.edit().putBoolean("background_generation",value).apply();if(value&&android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},46);});
         settings.addView(label("Фоновий режим лише для поточного запиту, до 5 хвилин. Постійний індикатор Android дозволяє зупинити генерацію.",12));
         clear=new Button(this);clear.setText("Очистити історію");settings.addView(clear);
-        clear.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну історію?").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(active==null){history=new JSONArray();prefs.edit().remove("history").apply();render();}}).show());
+        clear.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну історію?").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(GenerationSession.active==null){history=new JSONArray();prefs.edit().remove("history").apply();render();busy(false);}}).show());
         scroll=new ScrollView(this);messages=new LinearLayout(this);messages.setOrientation(LinearLayout.VERTICAL);scroll.addView(messages);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         input=new EditText(this);input.setHint("Напиши повідомлення…");input.setMinLines(2);input.setMaxLines(4);root.addView(input);
         LinearLayout buttons=new LinearLayout(this);send=new Button(this);send.setText("Надіслати");stop=new Button(this);stop.setText("Зупинити");buttons.addView(send,new LinearLayout.LayoutParams(0,-2,1));buttons.addView(stop,new LinearLayout.LayoutParams(0,-2,1));root.addView(buttons);send.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xff68263a));retry=new Button(this);retry.setText("Повторити останній запит");root.addView(retry);retry.setOnClickListener(v->retryLast());
@@ -94,32 +94,35 @@ public final class MainActivity extends Activity {
         setContentView(root);root.requestApplyInsets();render();busy(false);syncSession();MobileReminders.channel(this);
     }
     private void generate(){
-        String query=input.getText().toString().trim();if(!ready||active!=null||query.isEmpty())return;
+        String query=input.getText().toString().trim();if(!ready||GenerationSession.active!=null||query.isEmpty())return;
         if(query.codePointCount(0,query.length())>12000){status.setText("Максимум 12000 символів");return;}
         try{append("user",query);}catch(JSONException e){status.setText(e.toString());return;}
         input.setText("");offerMemory(query);startRequest();
     }
     private void retryLast(){
-        if(!ready||active!=null||history.length()==0)return;
+        if(!ready||GenerationSession.active!=null||history.length()==0)return;
         JSONObject last=history.optJSONObject(history.length()-1);
         if(last==null)return;
         if("user".equals(last.optString("role"))){startRequest();return;}
         if(history.length()<2||!"assistant".equals(last.optString("role")))return;
         JSONObject user=history.optJSONObject(history.length()-2);
         if(user==null||!"user".equals(user.optString("role")))return;
-        new AlertDialog.Builder(this).setTitle("Повторити генерацію?").setMessage("Попередня відповідь буде замінена.").setNegativeButton("Скасувати",null).setPositiveButton("Повторити",(d,w)->{if(active!=null)return;history.remove(history.length()-1);prefs.edit().putString("history",history.toString()).apply();startRequest();}).show();
+        new AlertDialog.Builder(this).setTitle("Повторити генерацію?").setMessage("Попередня відповідь буде замінена лише після успішної генерації.").setNegativeButton("Скасувати",null).setPositiveButton("Повторити",(d,w)->{if(GenerationSession.active!=null)return;startRequest(last.optString("content"));}).show();
     }
-    private void startRequest(){
-        JSONArray context=new JSONArray();for(int i=Math.max(0,history.length()-32);i<history.length();i++)context.put(history.opt(i));
+    private void startRequest(){startRequest(null);}
+    private void startRequest(String replaceExpected){
+        if(GenerationSession.active!=null)return;
+        int end=history.length()-(replaceExpected==null?0:1);
+        JSONArray context=new JSONArray();for(int i=Math.max(0,end-32);i<end;i++)context.put(history.opt(i));
         // Bound the JNI input while retaining the newest user message.
         while(context.length()>1&&context.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>240000)context.remove(0);
         final String data;try{data=memory.context(context);}catch(JSONException e){status.setText(e.toString());return;}final String server=base,selectedModel=model;
         boolean keep=prefs.getBoolean("background_generation",false);
         android.os.PowerManager power=getSystemService(android.os.PowerManager.class);
         if(power!=null&&power.isPowerSaveMode())keep=false;
-        if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)keep=false;
+        if(!MobileReminders.permitted(this))keep=false;
         try{
-            GenerationSession.start(this,data,server,selectedModel,server.equals(bridgeEndpoint)?bridgeKey:"",keep);
+            GenerationSession.start(this,data,server,selectedModel,server.equals(bridgeEndpoint)?bridgeKey:"",keep,replaceExpected);
             if(keep){try{startForegroundService(new android.content.Intent(this,GenerationService.class));}catch(RuntimeException e){GenerationSession.background=false;GenerationSession.status="Фоновий сервіс недоступний; генерація лише у відкритому чаті";GenerationSession.revision++;}}
             syncSession();
         }catch(RuntimeException e){status.setText("Помилка: "+e.getMessage());}
