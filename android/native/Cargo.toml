@@ -1,0 +1,12 @@
+[package]
+name = "hatoriel_android"
+version = "0.3.9"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+hatori_ai = { path = "../..", default-features = false }
+jni = "0.21"
+serde_json = "1"
