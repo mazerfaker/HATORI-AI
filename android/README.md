@@ -23,3 +23,6 @@ A process-local generation session survives Activity recreation; completed respo
 
 ## 0.4.7 desktop connectivity preview
 Optional HTTPS-only bearer session key for the loopback Windows Ollama bridge. Requires a separately configured trusted HTTPS reverse proxy/private network; no automatic discovery, device pairing or sync. See ../DESKTOP_CONNECTIVITY.md for setup and limitations. No build or cross-device test confirmed.
+
+## 0.4.7 stabilization patch (pre-redesign)
+Retry now preserves the previous assistant message until a replacement is successfully generated and committed, and leaves it unchanged on cancellation or failure. Changing endpoint disables memory-context sharing until explicitly re-enabled. Session deadline callback is removed after completion and timeout status is retained. Final NDJSON line is checked against the response bound. Stop notifications carry a generation-specific ID, and stale stop actions are ignored. Foreground mode checks system notification availability. No UI redesign or version bump; full concept approval pending. These changes were reviewed statically; push-triggered CI results were not available through the connector.
