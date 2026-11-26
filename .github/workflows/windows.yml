@@ -1,4 +1,4 @@
-name: HATORI Windows CI
+name: Hatoriel Windows CI
 on:
   push:
     branches: [main]
@@ -21,7 +21,7 @@ jobs:
       - run: cargo build --release
       - uses: actions/upload-artifact@v5
         with:
-          name: HATORI-Windows
+          name: Hatoriel-Windows
           path: |
             target/release/hatori_ai.exe
             Cargo.lock
@@ -39,7 +39,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v5
         with:
-          name: HATORI-Windows-Installer
+          name: Hatoriel-Windows-Installer
           path: dist/*-Setup.exe
           if-no-files-found: error
       - name: Package portable edition
@@ -53,6 +53,6 @@ jobs:
           Set-Content portable/README.txt 'Extract the entire folder. Close HATORI before moving it. Data is stored locally in data. Models and runtime are not included.'
       - uses: actions/upload-artifact@v5
         with:
-          name: HATORI-Windows-Portable
+          name: Hatoriel-Windows-Portable
           path: portable/
           if-no-files-found: error
