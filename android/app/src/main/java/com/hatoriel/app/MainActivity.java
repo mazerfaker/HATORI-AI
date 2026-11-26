@@ -28,6 +28,7 @@ public final class MainActivity extends Activity {
     private boolean ready,destroyed,importing;
     private TextView localModelStatus;
     private Button importModel;
+    private Button hardwareButton;
     private Thread importWorker;
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
     private TextView label(String value,int size){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setTextColor(0xfff4f0f2);return t;}
@@ -49,7 +50,7 @@ public final class MainActivity extends Activity {
         draftView=label(draftText,16);draftView.setTextColor(0xfff4f0f2);draftView.setPadding(dp(12),dp(10),dp(12),dp(10));draftView.setBackgroundColor(0xff161417);draftView.setVisibility(active==null?View.GONE:View.VISIBLE);messages.addView(draftView);
         scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
     }
-    private void busy(boolean value){send.setEnabled(ready&&!value);stop.setEnabled(value);clear.setEnabled(!value);memoryButton.setEnabled(!value);retry.setEnabled(ready&&!value&&history.length()>0);endpoint.setEnabled(!value);modelField.setEnabled(!value);importModel.setEnabled(!value&&!importing);}
+    private void busy(boolean value){send.setEnabled(ready&&!value);stop.setEnabled(value);clear.setEnabled(!value);memoryButton.setEnabled(!value);hardwareButton.setEnabled(!value&&!importing);retry.setEnabled(ready&&!value&&history.length()>0);endpoint.setEnabled(!value);modelField.setEnabled(!value);importModel.setEnabled(!value&&!importing);}
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
         prefs=getSharedPreferences("hatoriel_chat",MODE_PRIVATE);memory=new MobileMemory(prefs);
@@ -61,7 +62,7 @@ public final class MainActivity extends Activity {
         if(android.os.Build.VERSION.SDK_INT<30)root.setFitsSystemWindows(true);
         TextView title=label("HATORIEL  /  MOBILE",24);title.setTextColor(0xfff4f0f2);root.addView(title);
         status=label("Ініціалізація…",12);status.setTextColor(0xffb5aab0);root.addView(status);
-        Button config=new Button(this);config.setText("Налаштування підключення");root.addView(config);memoryButton=new Button(this);memoryButton.setText("Пам’ять та профіль");root.addView(memoryButton);memoryButton.setOnClickListener(v->showMemory());
+        Button config=new Button(this);config.setText("Налаштування підключення");root.addView(config);memoryButton=new Button(this);memoryButton.setText("Пам’ять та профіль");root.addView(memoryButton);memoryButton.setOnClickListener(v->showMemory());hardwareButton=new Button(this);hardwareButton.setText("Обладнання та моделі");root.addView(hardwareButton);hardwareButton.setOnClickListener(v->showHardware());
         settings=new LinearLayout(this);settings.setOrientation(LinearLayout.VERTICAL);settings.setVisibility(View.GONE);root.addView(settings);
         endpoint=field(base,"URL Ollama-сервера");modelField=field(model,"Назва моделі");settings.addView(endpoint);settings.addView(modelField);
         settings.addView(label("HTTP дозволено лише на цьому телефоні. HTTPS — для явно вибраного сервера. Історія надсилається на вибраний сервер.",12));
@@ -156,7 +157,27 @@ public final class MainActivity extends Activity {
         panel.addView(interests);panel.addView(communication);panel.addView(goals);
         new AlertDialog.Builder(this).setTitle("Профіль").setView(panel).setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{try{memory.saveProfile(interests.getText().toString(),communication.getText().toString(),goals.getText().toString());showMemory();}catch(JSONException e){status.setText(e.toString());}}).show();
     }
+    private String gib(long bytes){return String.format(java.util.Locale.ROOT,"%.2f GiB",bytes/1073741824.0);}
+    private void showHardware(){
+        if(active!=null||importing)return;
+        ScrollView sv=new ScrollView(this);LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(20),dp(8),dp(20),dp(8));sv.addView(panel);
+        TextView report=label("",14);panel.addView(report);
+        panel.addView(label("Профіль майбутнього локального runtime",14));
+        Spinner mode=new Spinner(this);String[] profiles={"Eco","Balanced","Performance"};
+        mode.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,profiles));
+        String saved=prefs.getString("runtime_profile","Balanced");mode.setSelection("Eco".equals(saved)?0:"Performance".equals(saved)?2:1);panel.addView(mode);
+        Runnable refresh=()->{try{
+            DeviceProfile d=DeviceProfile.read(this);String profile=String.valueOf(mode.getSelectedItem());
+            java.io.File file=ModelImport.selected(this);long size=file.isFile()?file.length():0;
+            report.setText(d.device+"\nSoC: "+d.soc+"\nCPU: "+d.cores+" доступних логічних ядер\nARM64: "+(d.arm64?"так":"ні")+"\nRAM: "+gib(d.totalRam)+" · доступно "+gib(d.availableRam)+"\nВільне сховище: "+gib(d.storage)+"\nЕнергозбереження: "+(d.powerSave?"увімкнено":"вимкнено")+"\nТермальний статус: "+(d.thermal<0?"невідомий":String.valueOf(d.thermal))+"\n\n"+d.recommendation()+"\n\nGGUF: "+(size>0?gib(size):"немає")+"\nОрієнтовна RAM: "+(size>0?gib(DeviceProfile.estimate(size,DeviceProfile.context(profile))):"—")+"\nБюджет RAM: "+gib(d.budget())+"\n"+d.warning(size,profile)+"\n\nПотоки: "+DeviceProfile.threads(d.cores,profile)+" · контекст: "+DeviceProfile.context(profile)+"\nПрофіль поки не керує генерацією.");
+        }catch(Exception e){report.setText("Діагностика недоступна: "+e.getMessage());}};
+        mode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){prefs.edit().putString("runtime_profile",profiles[pos]).apply();refresh.run();}public void onNothingSelected(android.widget.AdapterView<?> p){}});
+        Button scan=new Button(this);scan.setText("Оновити діагностику");panel.addView(scan);scan.setOnClickListener(v->refresh.run());
+        Button remove=new Button(this);remove.setText("Видалити імпортовану GGUF");panel.addView(remove);
+        remove.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну модель?").setMessage("Видаляється лише копія в Hatoriel. Початковий файл не змінюється.").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(importing||active!=null)return;try{if(!ModelImport.remove(this))throw new java.io.IOException("Не вдалося видалити");refreshLocalModel();refresh.run();}catch(Exception e){status.setText(e.getMessage());}}).show());
+        refresh.run();new AlertDialog.Builder(this).setTitle("Hardware & Model Manager").setView(sv).setPositiveButton("Закрити",null).show();
+    }
     private void refreshLocalModel(){try{java.io.File file=ModelImport.selected(this);localModelStatus.setText(file.isFile()?String.format(java.util.Locale.ROOT,"GGUF: %.2f GiB · імпортовано, запуск ще недоступний",file.length()/1073741824.0):"GGUF не імпортовано");}catch(java.io.IOException e){localModelStatus.setText(e.getMessage());}}
-    @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
+    @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);hardwareButton.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);hardwareButton.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
     @Override protected void onDestroy(){destroyed=true;if(importWorker!=null)importWorker.interrupt();if(active!=null)active.cancel();super.onDestroy();}
 }
