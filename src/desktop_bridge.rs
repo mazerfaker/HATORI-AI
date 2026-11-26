@@ -26,6 +26,7 @@ impl Bridge{
  pub fn stop(&mut self){if let Some(s)=&self.stop{s.store(true,Ordering::Relaxed);}self.token.clear();}
 }
 impl Drop for Bridge{fn drop(&mut self){self.stop();}}
+fn status_payload(model:&str)->Value{json!({"service":"hatoriel-desktop","protocol":1,"model":model,"backend":"ollama"})}
 fn same(a:&str,b:&str)->bool{if a.len()!=b.len(){return false;}a.bytes().zip(b.bytes()).fold(0u8,|v,(x,y)|v|(x^y))==0}
 fn reply(req:Request,status:u16,message:&str){let _=req.respond(Response::from_string(json!({"error":message}).to_string()).with_status_code(StatusCode(status)));}
 struct LimitedStream{source:reqwest::blocking::Response,stop:Arc<AtomicBool>,remaining:usize}
@@ -40,7 +41,8 @@ fn handle(mut req:Request,client:&reqwest::blocking::Client,model:&str,secret:&s
  if !authorized{reply(req,401,"Unauthorized");return;}
  if req.method()==&Method::Get&&req.url()=="/api/status"{
   let header=Header::from_bytes(&b"Content-Type"[..],&b"application/json"[..]).expect("static header");
-  let _=req.respond(Response::from_string(json!({"service":"hatoriel-desktop","protocol":1,"model":model,"backend":"ollama"}).to_string()).with_header(header));return;
+  let cache=Header::from_bytes(&b"Cache-Control"[..],&b"no-store"[..]).expect("static header");
+  let _=req.respond(Response::from_string(status_payload(model).to_string()).with_header(header).with_header(cache));return;
  }
  if req.method()!=&Method::Post||req.url()!="/api/chat"{reply(req,404,"Unsupported endpoint");return;}
  let Some(len)=req.body_length() else{reply(req,411,"Content-Length required");return;};
@@ -64,4 +66,4 @@ fn handle(mut req:Request,client:&reqwest::blocking::Client,model:&str,secret:&s
   },_=>reply(req,502,"Local Ollama unavailable or rejected request")
  }
 }
-#[cfg(test)]mod tests{use super::*;#[test]fn auth(){assert!(same("abc","abc"));assert!(!same("abc","abd"));assert!(!same("abc","ab"));}}
+#[cfg(test)]mod tests{use super::*;#[test]fn auth(){assert!(same("abc","abc"));assert!(!same("abc","abd"));assert!(!same("abc","ab"));}#[test]fn status_exposes_only_protocol_and_model(){let v=status_payload("test-model");assert_eq!(v["model"],"test-model");assert_eq!(v["protocol"],1);assert_eq!(v.as_object().unwrap().len(),4);}}
