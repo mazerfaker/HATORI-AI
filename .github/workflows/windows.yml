@@ -38,3 +38,17 @@ jobs:
           name: HATORI-Windows-Installer
           path: dist/*-Setup.exe
           if-no-files-found: error
+      - name: Package portable edition
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force portable,portable/data,portable/models,portable/runtime | Out-Null
+          Copy-Item target/release/hatori_ai.exe portable/
+          Set-Content portable/portable.flag 'Portable mode'
+          Set-Content portable/models/README.txt 'Place GGUF models here.'
+          Set-Content portable/runtime/README.txt 'Place compatible llama-server.exe and its DLLs here.'
+          Set-Content portable/README.txt 'Extract the entire folder. Close HATORI before moving it. Data is stored locally in data. Models and runtime are not included.'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HATORI-Windows-Portable
+          path: portable/
+          if-no-files-found: error
