@@ -27,8 +27,8 @@ public final class GenerationService extends Service {
             if(Build.VERSION.SDK_INT>=29)startForeground(NOTIFICATION,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
             else startForeground(NOTIFICATION,n);
         }catch(RuntimeException e){GenerationSession.background=false;GenerationSession.revision++;stopSelf();return START_NOT_STICKY;}
-        owner=GenerationSession.job;handler.removeCallbacks(check);handler.post(check);return START_NOT_STICKY;
+        owner=intent==null?-1:intent.getLongExtra("job",-1);handler.removeCallbacks(check);handler.post(check);return START_NOT_STICKY;
     }
-    @Override public void onTimeout(int startId,int fgsType){if(GenerationSession.job==owner)GenerationSession.cancel();stopSelf();}
+    @Override public void onTimeout(int startId,int fgsType){if(GenerationSession.job==owner)GenerationSession.cancel();stopSelf(startId);}
     @Override public void onDestroy(){handler.removeCallbacks(check);if(GenerationSession.job==owner&&GenerationSession.background&&GenerationSession.active!=null)GenerationSession.cancel();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}
 }
