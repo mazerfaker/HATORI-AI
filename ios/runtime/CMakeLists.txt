@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.20)
+project(HatorielLocal LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+add_subdirectory(${LLAMA_SOURCE} llama-build EXCLUDE_FROM_ALL)
+add_library(hatoriel_local STATIC local.cpp)
+target_link_libraries(hatoriel_local PRIVATE llama)
