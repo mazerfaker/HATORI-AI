@@ -40,7 +40,8 @@ enum ChatTransport {
     }
     struct BridgeStatus: Decodable {
         let service: String
-        let `protocol`: Int
+        let protocolVersion: Int
+        enum CodingKeys: String, CodingKey { case service, model, backend; case protocolVersion = "protocol" }
         let model: String
         let backend: String
     }
@@ -72,7 +73,7 @@ enum ChatTransport {
             data.append(byte)
         }
         let info = try JSONDecoder().decode(BridgeStatus.self, from: data)
-        guard info.service == "hatoriel-desktop", info.protocol == 1, info.backend == "ollama" else {
+        guard info.service == "hatoriel-desktop", info.protocolVersion == 1, info.backend == "ollama" else {
             throw CoreFailure.rejected("Несумісний шлюз Hatoriel.")
         }
         return info
