@@ -34,6 +34,7 @@ final class ModelImport {
                 }
                 out.getFD().sync();
             }
+            if(Thread.currentThread().isInterrupted())throw new InterruptedIOException("Import cancelled");
             if(total<24)throw new IOException("Truncated GGUF header");
             // Android private storage: atomic rename replaces the prior file only after successful copy.
             android.system.Os.rename(tmp.getAbsolutePath(),dest.getAbsolutePath());
