@@ -1,0 +1,9 @@
+# Desktop Connectivity 0.4.7 (preview)
+
+On Windows, open Devices, select an installed Ollama model and start the bridge. It listens only on 127.0.0.1:17845; it never binds to the LAN or Internet. The bridge creates a fresh 256-bit random session key. The selected model is fixed for the session. The only allowed route is POST /api/chat, authorized by the bearer key. It forwards sanitized messages to the loopback Ollama service, with bounded request/response sizes and generation limits. It does not expose files, model downloads, desktop memory or operating system commands.
+
+To connect Android from another device, a separately configured trusted HTTPS reverse proxy must forward only /api/chat to 127.0.0.1:17845. Restrict network access to your own devices (for example a private VPN); use a trusted certificate, request/time limits, no request body or Authorization logging, and preserve streaming and Authorization headers. Do not forward the raw HTTP port or expose Ollama directly. This release does not install or configure any proxy or VPN.
+
+In Android connection settings enter the HTTPS base URL, same model and session key; confirm. The key is held in process memory, not persisted. Messages, recent history and any separately enabled memory/profile context go to the chosen server. Stop the bridge to revoke future requests; a current blocked stream may take time to end. Restart generates a new key. There is one shared session credential, no individual device registration, per-device revocation or synchronization. Local Android GGUF generation remains pending. GPU acceleration depends on the installed Ollama setup; the bridge does not configure or guarantee it.
+
+No integration test across devices or successful CI build is confirmed. Review and test locally before enabling any network route. Full UI redesign requires user approval.
