@@ -45,6 +45,7 @@ struct CrimsonReticle: View {
 @MainActor
 struct FoundationView: View {
     @StateObject private var chat = ChatStore()
+    @StateObject private var reminders = ReminderStore()
     @Environment(\.scenePhase) private var scenePhase
     @State private var input = ""
     @State private var settings = false
@@ -146,8 +147,8 @@ struct FoundationView: View {
             Button("Скасувати", role: .cancel) {}
             Button("Повторити") { chat.retry() }
         } message: { Text("Попередня відповідь збережеться, якщо нова генерація не завершиться.") }
-        .onChange(of: scenePhase) { phase in if phase == .background { chat.cancel() }; if phase == .active { chat.reloadMemory() } }
-        .task { coreVersion = (try? NativeCore.version()) ?? "Недоступне" }
+        .onChange(of: scenePhase) { phase in if phase == .background { chat.cancel() }; if phase == .active { chat.reloadMemory(); Task { await reminders.refresh() } } }
+        .task { coreVersion = (try? NativeCore.version()) ?? "Недоступне"; await reminders.refresh() }
     }
 
     private func bubble(role: String, text: String) -> some View {
@@ -192,6 +193,13 @@ struct FoundationView: View {
                     Button("Видалити локальну копію", role: .destructive) { confirmRemove = true }.disabled(chat.importing || chat.localSize == 0)
                     Text("CPU Preview. До 512 токенів відповіді. Оцінка RAM приблизна, сумісність не гарантована. У локальному режимі запити не надсилаються на сервер.").font(.footnote)
                     Text(chat.status).font(.caption)
+                }
+                Section("Завдання") {
+                    NavigationLink {
+                        ReminderView(store: reminders)
+                    } label: {
+                        LabeledContent("Нагадування та сповіщення", value: "\(reminders.data.reminders.count)")
+                    }
                 }
                 Section("Довготривала пам’ять") {
                     NavigationLink {
@@ -243,7 +251,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.5.4")
+                    Text("Crimson Core Minimal · 0.5.5")
                     Text("Rust Core " + coreVersion)
                 }
             }
