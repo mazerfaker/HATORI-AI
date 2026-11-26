@@ -41,6 +41,7 @@ struct CrimsonReticle: View {
     }
 }
 
+@MainActor
 struct FoundationView: View {
     @StateObject private var chat = ChatStore()
     @Environment(\.scenePhase) private var scenePhase
@@ -53,6 +54,10 @@ struct FoundationView: View {
     @State private var confirmClear = false
     @State private var confirmRetry = false
     @State private var coreVersion = ""
+    @State private var personality = CoreOptions()
+    private let traitLabels = ["Аналітичність","Емпатія","Допитливість","Гумор","Ініціативність","Емоційність","Сарказм"]
+    private let modeLabels = ["Companion":"Компаньйон","Assistant":"Асистент","Developer":"Розробник","Researcher":"Дослідник"]
+    private let moodLabels = ["Calm":"Спокій","Joy":"Радість","Concern":"Турбота","Surprise":"Здивування","Curiosity":"Допитливість"]
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -66,7 +71,7 @@ struct FoundationView: View {
                 Spacer()
                 Button {
                     focused = false
-                    endpoint = chat.endpoint; model = chat.model; settingsError = ""; settings = true
+                    endpoint = chat.endpoint; model = chat.model; personality = chat.options; settingsError = ""; settings = true
                 } label: { Image(systemName: "gearshape").font(.title3).frame(width: 44, height: 44) }
                 .accessibilityLabel("Налаштування").disabled(chat.busy)
             }.padding(.horizontal, 16).padding(.vertical, 8)
@@ -154,12 +159,50 @@ struct FoundationView: View {
                     if !settingsError.isEmpty { Text(settingsError).foregroundStyle(crimson) }
                     Button("Зберегти підключення") { confirmServer = true }
                 }
+                Section("Особистість") {
+                    Picker("Режим", selection: $personality.mode) {
+                        ForEach(CoreOptions.modes, id: \.self) { mode in
+                            Text(modeLabels[mode] ?? mode).tag(mode)
+                        }
+                    }
+                    ForEach(0..<7, id: \.self) { i in
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text(traitLabels[i])
+                                Spacer()
+                                Text("\(personality.traits[i]) / 100").font(.caption.monospacedDigit())
+                            }
+                            Slider(value: Binding(get: { Double(personality.traits[i]) },
+                                                  set: { personality.traits[i] = UInt8(max(0, min(100, $0.rounded()))) }),
+                                   in: 0...100, step: 1)
+                                .accessibilityLabel(traitLabels[i])
+                        }
+                    }
+                    Toggle("Адаптивний стиль", isOn: $personality.dynamic_style)
+                    Toggle("Симуляція емоцій", isOn: $personality.emotion_enabled)
+                    if personality.emotion_enabled {
+                        LabeledContent("Останній стан", value: moodLabels[personality.mood.mood] ?? "Спокій")
+                        ProgressView(value: Double(personality.mood.intensity), total: 100)
+                        Button("Скинути стан") { personality.mood = CoreMood() }
+                        Text("Моделювання тону відповіді за правилами, а не справжні почуття. Стан уточнюється при наступному запиті.").font(.footnote)
+                    }
+                    if chat.effectiveTraits.count == 7 {
+                        DisclosureGroup("Ефективні риси останнього контексту") {
+                            ForEach(0..<7, id: \.self) { i in
+                                LabeledContent(traitLabels[i], value: "\(chat.effectiveTraits[i])")
+                            }
+                        }
+                    }
+                    Text("Налаштування особистості використовуються у контексті, який надсилається підтвердженому AI-серверу.").font(.footnote)
+                    Button("Відновити базові риси") { personality = CoreOptions() }
+                    Button("Зберегти особистість") { chat.configurePersonality(personality); personality = chat.options }
+                }
                 Section("Дані") {
                     Button("Очистити історію", role: .destructive) { confirmClear = true }
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.5.1")
+                    Text("Crimson Core Minimal · 0.5.2")
                     Text("Rust Core " + coreVersion)
                 }
             }
