@@ -67,4 +67,8 @@ pub fn command(input:&str)->Result<String,String>{
  #[test]fn roundtrip(){let p=seal(sample(),"test passphrase 123").unwrap();assert_eq!(open(&p,"test passphrase 123").unwrap().records[0].content,"Люблю гітару");assert!(open(&p,"wrong passphrase").is_err());let mut b=STANDARD.decode(p).unwrap();let i=b.len()-1;b[i]^=1;assert!(open(&STANDARD.encode(b),"test passphrase 123").is_err());}
  #[test]fn local_wins(){let local=sample();let mut other=sample();other.records[0].importance=50;let p=plan(&local,other).unwrap();assert_eq!(p.conflicts,1);assert!(p.additions.is_empty());}
  #[test]fn duplicate(){assert_eq!(plan(&sample(),sample()).unwrap().duplicates,1);}
+ #[test]fn normalization_and_incoming_duplicates(){let mut incoming=sample();incoming.records.push(Record{content:" new   entry ".into(),category:"General".into(),importance:50});incoming.records.push(Record{content:"NEW ENTRY".into(),category:"General".into(),importance:50});let p=plan(&sample(),incoming).unwrap();assert_eq!(p.duplicates,2);assert_eq!(p.additions.len(),1);}
+ #[test]fn limit_rejects_merge(){let mut local=sample();local.records=(0..100).map(|i|Record{content:format!("record {i}"),category:"General".into(),importance:50}).collect();assert!(plan(&local,sample()).is_err());}
+ #[test]fn invalid_record_and_version(){let mut s=sample();s.records[0].category="invalid".into();assert!(s.validate().is_err());let mut s=sample();s.version=2;assert!(s.validate().is_err());}
+ #[test]fn malformed_package(){assert!(open("not base64","test passphrase 123").is_err());assert!(seal(sample(),"short").is_err());}
 }
