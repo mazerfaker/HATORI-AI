@@ -172,12 +172,58 @@ public final class MainActivity extends Activity {
         CheckBox suggest=new CheckBox(this);suggest.setText("Пропонувати нові спогади");suggest.setChecked(memory.suggestions());panel.addView(suggest);suggest.setOnCheckedChangeListener((b,checked)->memory.setSuggestions(checked));
         Button add=new Button(this);add.setText("Додати спогад");panel.addView(add);
         Button profile=new Button(this);profile.setText("Редагувати профіль");panel.addView(profile);
+        Button transfer=new Button(this);transfer.setText("Захищене перенесення");panel.addView(transfer);
         JSONArray rows=memory.records();
         for(int i=rows.length()-1;i>=0;i--){JSONObject m=rows.optJSONObject(i);if(m==null)continue;TextView item=label(m.optString("content")+"\n"+m.optString("category")+" · "+m.optInt("importance")+"/100",14);panel.addView(item);
             Button remove=new Button(this);remove.setText("Видалити");panel.addView(remove);remove.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити спогад?").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{memory.remove(m.optLong("id"));item.setVisibility(View.GONE);remove.setVisibility(View.GONE);}).show());
         }
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Пам’ять Hatoriel").setView(sv).setPositiveButton("Закрити",null).create();
-        add.setOnClickListener(v->{dialog.dismiss();addMemory();});profile.setOnClickListener(v->{dialog.dismiss();editProfile();});dialog.show();
+        add.setOnClickListener(v->{dialog.dismiss();addMemory();});profile.setOnClickListener(v->{dialog.dismiss();editProfile();});transfer.setOnClickListener(v->{dialog.dismiss();showTransfer();});dialog.show();
+    }
+    private void showTransfer(){
+        if(GenerationSession.active!=null)return;
+        LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(20),dp(8),dp(20),dp(8));
+        ScrollView scroll=new ScrollView(this);scroll.addView(panel);
+        panel.addView(label("Перенесення пам’яті, профілю та особистості. Пароль передавай окремо.",14));
+        EditText pass=new EditText(this);pass.setHint("Парольна фраза 12+ символів");pass.setInputType(129);pass.setSaveEnabled(false);panel.addView(pass);
+        EditText pack=new EditText(this);pack.setHint("Зашифрований пакет");pack.setMinLines(3);pack.setMaxLines(6);pack.setSaveEnabled(false);panel.addView(pack);
+        Button seal=new Button(this);seal.setText("Створити пакет");panel.addView(seal);
+        Button open=new Button(this);open.setText("Переглянути імпорт");panel.addView(open);
+        TextView report=label("",14);panel.addView(report);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Перенесення Hatoriel").setView(scroll).setPositiveButton("Закрити",null).create();
+        java.util.function.Consumer<Boolean> execute=export->{
+            try{
+                JSONObject local=memory.snapshot();String baseline=local.toString(),secret=pass.getText().toString(),encoded=pack.getText().toString();
+                if(encoded.length()>2097152)throw new IllegalArgumentException("Пакет завеликий");
+                JSONObject command=new JSONObject().put("action",export?"seal":"preview").put("password",secret);
+                if(export)command.put("snapshot",local);else command.put("local",local).put("package",encoded);
+                pass.setText("");seal.setEnabled(false);open.setEnabled(false);report.setText("Обробка…");
+                new Thread(()->{
+                    try{
+                        JSONObject result=new JSONObject(NativeCore.sync(command.toString()));
+                        if(result.has("error"))throw new IllegalStateException(result.getString("error"));
+                        runOnUiThread(()->{
+                            if(!dialog.isShowing()||isFinishing()||isDestroyed())return;
+                            seal.setEnabled(true);open.setEnabled(true);
+                            if(export){pack.setText(result.optString("package"));report.setText("Пакет створено");return;}
+                            JSONArray additions=result.optJSONArray("additions");
+                            String summary="Нові: "+(additions==null?0:additions.length())+"; дублікати: "+result.optInt("duplicates")+"; конфлікти: "+result.optInt("conflicts");
+                            LinearLayout review=new LinearLayout(this);review.setOrientation(LinearLayout.VERTICAL);review.setPadding(dp(20),0,dp(20),0);review.addView(label(summary,14));
+                            CheckBox profile=new CheckBox(this);profile.setText("Замінити профіль");review.addView(profile);
+                            CheckBox personality=new CheckBox(this);personality.setText("Замінити особистість");review.addView(personality);
+                            new AlertDialog.Builder(this).setTitle("Підтвердити імпорт?").setView(review).setNegativeButton("Скасувати",null).setPositiveButton("Об’єднати",(d,w)->{
+                                try{
+                                    if(GenerationSession.active!=null||!baseline.equals(memory.snapshot().toString())||!encoded.equals(pack.getText().toString()))throw new IllegalStateException("Дані змінилися. Повтори перегляд.");
+                                    memory.applySync(result,profile.isChecked(),personality.isChecked());report.setText("Імпортовано; передачу пам’яті серверу вимкнено.");
+                                }catch(Exception e){report.setText(e.getMessage());}
+                            }).show();
+                        });
+                    }catch(Exception|LinkageError e){runOnUiThread(()->{if(dialog.isShowing()){seal.setEnabled(true);open.setEnabled(true);report.setText("Помилка: "+e.getMessage());}});}
+                },"hatoriel-sync").start();
+            }catch(Exception e){report.setText(e.getMessage());}
+        };
+        seal.setOnClickListener(v->execute.accept(true));open.setOnClickListener(v->execute.accept(false));
+        dialog.setOnDismissListener(d->pass.setText(""));dialog.show();
     }
     private void addMemory(){
         LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(20),0,dp(20),0);
