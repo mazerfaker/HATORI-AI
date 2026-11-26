@@ -5,4 +5,6 @@ public final class NativeCore {
     public static native String version();
     public static native String prepare(String input);
     public static native String prepareHistory(String historyJson);
+    public static native String prepareMemory(String contextJson);
+    public static native String suggestMemory(String input);
 }
