@@ -35,20 +35,8 @@ pub extern "system" fn Java_com_hatoriel_app_NativeCore_prepareHistory(mut env:J
 }
 
 fn prepare_memory_json(json:&str)->Result<String,String>{
- use hatori_ai::{adaptive,memory_core};
- if json.len()>1024*1024{return Err("Context exceeds limit".into());}
- let v:serde_json::Value=serde_json::from_str(json).map_err(|e|e.to_string())?;
- let history:Vec<Message>=serde_json::from_value(v["history"].clone()).map_err(|e|e.to_string())?;
- if history.len()>32{return Err("Too many messages".into());}
- let query=history.last().filter(|m|m.role=="user").ok_or("Missing user message")?.content.clone();
- if query.trim().is_empty()||query.chars().count()>12000{return Err("Invalid user message".into());}
- let records=v["memories"].as_array().ok_or("Invalid memories")?;
- if records.len()>100{return Err("Too many memories".into());}
- let memories=records.iter().filter_map(|m|{let s=m["content"].as_str()?;if s.chars().count()>500{return None;}Some((s.to_owned(),m["importance"].as_u64().unwrap_or(50).min(100) as u8,m["id"].as_i64().unwrap_or(0)))}).collect::<Vec<_>>();
- let profile:adaptive::Profile=serde_json::from_value(v["profile"].clone()).map_err(|e|e.to_string())?;
- let relevant=memory_core::ranked(&query,&memories);
- let req=core::Request{model:"mobile".into(),mode:"Companion".into(),traits:[90,80,90,90,90,80,70],query,history,memories,profile,mood:None,dynamic_style:true,embedding_model:None};
- serde_json::to_string(&core::prepare(&req,&relevant)).map_err(|e|e.to_string())
+ let output=hatori_ai::mobile_context::prepare_json(json.as_bytes(),hatori_ai::emotion::now())?;
+ serde_json::to_string(&output.messages).map_err(|e|e.to_string())
 }
 #[no_mangle]
 pub extern "system" fn Java_com_hatoriel_app_NativeCore_prepareMemory(mut env:JNIEnv,_class:JClass,input:JString)->jstring{
