@@ -40,3 +40,17 @@ pub unsafe extern "C" fn hatoriel_prepare_context(data:*const u8,len:usize)->*mu
  });
  owned(match result{Ok(Ok(s))=>s,Ok(Err(e))=>serde_json::json!({"error":e}).to_string(),Err(_)=>serde_json::json!({"error":"Native core failure"}).to_string()})
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn hatoriel_suggest_memory(data:*const u8,len:usize)->*mut c_char{
+ let result=std::panic::catch_unwind(||->Result<String,String>{
+ if data.is_null()||len==0||len>2000{return Ok("null".into());}
+ let input=std::str::from_utf8(unsafe{std::slice::from_raw_parts(data,len)}).map_err(|e|e.to_string())?;
+ Ok(match hatori_ai::memory_suggest::suggest(input){Some(m)=>serde_json::json!({"content":m.content,"category":m.category,"importance":m.importance}).to_string(),None=>"null".into()})
+ });
+ owned(match result{Ok(Ok(s))=>s,_=>"null".into()})
+}
+#[cfg(test)]mod suggestion_tests{use super::*;
+ #[test]fn suggestion_utf8(){let s="Я люблю гітару";unsafe{let p=hatoriel_suggest_memory(s.as_ptr(),s.len());let v:serde_json::Value=serde_json::from_str(std::ffi::CStr::from_ptr(p).to_str().unwrap()).unwrap();assert_eq!(v["category"],"Interests");hatoriel_free(p);}}
+ #[test]fn no_suggestion(){let s="Привіт";unsafe{let p=hatoriel_suggest_memory(s.as_ptr(),s.len());assert_eq!(std::ffi::CStr::from_ptr(p).to_str().unwrap(),"null");hatoriel_free(p);}}
+}
