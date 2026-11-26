@@ -10,12 +10,12 @@ impl Runtime{
  pub fn running(&mut self)->bool{
  if let Some(c)=self.child.as_mut(){match c.try_wait(){Ok(None)=>return true,Ok(Some(_))=>{},Err(_)=>return true}}self.child=None;false
  }
- pub fn start(&mut self,exe:&Path,model:&Path)->Result<(),String>{
+ pub fn start(&mut self,exe:&Path,model:&Path,gpu_layers:u32)->Result<(),String>{
  if self.running(){return Err("Runtime already running".into());}
  validate_model(model)?;
  let exe=exe.canonicalize().map_err(|e|e.to_string())?;
  let model=model.canonicalize().map_err(|e|e.to_string())?;
- let mut cmd=Command::new(exe);cmd.arg("-m").arg(model).args(["--host","127.0.0.1","--port","8080","--alias","hatori-local","-ngl","0"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+ let mut cmd=Command::new(exe);cmd.arg("-m").arg(model).args(["--host","127.0.0.1","--port","8080","--alias","hatori-local","-ngl"]).arg(gpu_layers.min(999).to_string()).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
  #[cfg(windows)]{use std::os::windows::process::CommandExt;cmd.creation_flags(0x08000000);}
  self.child=Some(cmd.spawn().map_err(|e|e.to_string())?);Ok(())
  }
