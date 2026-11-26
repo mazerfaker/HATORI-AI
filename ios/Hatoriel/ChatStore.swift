@@ -124,6 +124,19 @@ struct ChatEntry: Codable, Identifiable {
               !memory.records.contains(where: { MemoryVault.normalized($0.content) == MemoryVault.normalized(item.content) }) else { return }
         suggestion = item
     }
+    func syncSnapshot() throws -> SyncSnapshot {
+        guard !busy, memoryError == nil else { throw CoreFailure.rejected("Пам’ять недоступна або генерація активна.") }
+        var safe = options; safe.mood = CoreMood()
+        return SyncSnapshot(version: 1, records: memory.records.map { SyncRecord(content: $0.content, category: $0.category, importance: $0.importance) }, profile: memory.profile, options: safe)
+    }
+    func applySync(_ plan: SyncPlan, profile: Bool, personality: Bool) throws {
+        try updateMemory { vault in
+            for row in plan.additions { try vault.save(id: nil, content: row.content, category: row.category, importance: row.importance) }
+            if profile { try vault.setProfile(plan.profile) }
+            vault.approvedEndpoint = nil
+        }
+        if personality { configurePersonality(plan.options) }
+    }
     func configurePersonality(_ proposed: CoreOptions) {
         guard !busy else { return }
         options = proposed.validated
