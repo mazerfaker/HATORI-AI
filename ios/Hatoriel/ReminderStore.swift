@@ -73,7 +73,7 @@ struct ReminderPreferences: Codable {
         guard !working else { return }
         working = true; defer { working = false }
         do {
-            _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+            _ = try await center.requestAuthorization(options: [.alert, .sound])
             await reconcile()
         } catch { status = error.localizedDescription }
     }
@@ -146,12 +146,12 @@ struct ReminderPreferences: Codable {
             guard seconds > 0 else { continue }
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, seconds), repeats: false)
             do { try await center.add(UNNotificationRequest(identifier: id, content: content(row.text), trigger: trigger)) }
-            catch { failures += 1 }
+            catch { failures += 1; if force { center.removePendingNotificationRequests(withIdentifiers: [id]) } }
         }
         if data.checkIn && !existing.contains(Self.checkInID) {
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: Double(data.checkInMinutes)*60, repeats: true)
             do { try await center.add(UNNotificationRequest(identifier: Self.checkInID, content: content("", checkIn: true), trigger: trigger)) }
-            catch { failures += 1 }
+            catch { failures += 1; if force { center.removePendingNotificationRequests(withIdentifiers: [Self.checkInID]) } }
         }
         pending = Set((await center.pendingNotificationRequests()).filter { $0.identifier.hasPrefix(Self.prefix) }.map(\.identifier))
         status = failures == 0 ? "Заплановано: \(pending.count)" : "Не вдалося запланувати: \(failures). Повтори перевірку."
