@@ -50,6 +50,8 @@ struct FoundationView: View {
     @State private var input = ""
     @State private var settings = false
     @State private var endpoint = ""
+    @State private var desktop = false
+    @State private var sessionKey = ""
     @State private var model = ""
     @State private var settingsError = ""
     @State private var confirmServer = false
@@ -71,12 +73,12 @@ struct FoundationView: View {
                 CrimsonReticle(busy: chat.busy).frame(width: 44, height: 44)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("H A T O R I E L").font(.headline)
-                    Text(chat.localMode ? "CRIMSON CORE · LOCAL" : "CRIMSON CORE").font(.caption2).foregroundStyle(crimson)
+                    Text(chat.localMode ? "CRIMSON CORE · LOCAL" : chat.desktopMode ? "CRIMSON CORE · PC" : "CRIMSON CORE").font(.caption2).foregroundStyle(crimson)
                 }
                 Spacer()
                 Button {
                     focused = false
-                    endpoint = chat.endpoint; model = chat.model; personality = chat.options; settingsError = ""; settings = true
+                    endpoint = chat.endpoint; model = chat.model; desktop = chat.desktopMode; sessionKey = ""; personality = chat.options; settingsError = ""; settings = true
                 } label: { Image(systemName: "gearshape").font(.title3).frame(width: 44, height: 44) }
                 .accessibilityLabel("Налаштування").disabled(chat.busy)
             }.padding(.horizontal, 16).padding(.vertical, 8)
@@ -142,7 +144,7 @@ struct FoundationView: View {
                 }
             }.padding(12)
         }.background(graphite.ignoresSafeArea()).foregroundStyle(.white).tint(crimson)
-        .sheet(isPresented: $settings) { settingsView }
+        .sheet(isPresented: $settings, onDismiss: { sessionKey = "" }) { settingsView }
         .alert("Повторити останній запит?", isPresented: $confirmRetry) {
             Button("Скасувати", role: .cancel) {}
             Button("Повторити") { chat.retry() }
@@ -173,10 +175,21 @@ struct FoundationView: View {
                     TextField("https://server.example", text: $endpoint).textContentType(.URL)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("Модель", text: $model).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Toggle("Підключення до Hatoriel на ПК", isOn: $desktop)
+                    if desktop {
+                        SecureField("Новий ключ сеансу (64 символи)", text: $sessionKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Text("На ПК відкрий «Пристрої», запусти шлюз та скопіюй ключ. Потрібен окремий HTTPS-проксі в приватній мережі. Ключ зберігається лише в оперативній пам’яті; після перезапуску введи його знову.").font(.footnote)
+                    }
+                    if chat.desktopMode {
+                        LabeledContent("Збережений сеанс", value: chat.hasDesktopKey ? "Ключ у пам’яті" : "Без ключа")
+                        Text(chat.connectionStatus).font(.footnote)
+                        Button("Перевірити збережене підключення") { Task { await chat.checkDesktop() } }.disabled(!chat.hasDesktopKey || chat.checkingConnection)
+                        Button("Видалити ключ сеансу", role: .destructive) { chat.forgetDesktopKey(); sessionKey = "" }.disabled(chat.checkingConnection)
+                    }
                     Text("Лише HTTPS із довіреним сертифікатом. Повідомлення та частина історії надсилаються на вибраний сервер Ollama. Для локального режиму скористайся розділом «Локальний AI».")
                         .font(.footnote)
                     if !settingsError.isEmpty { Text(settingsError).foregroundStyle(crimson) }
-                    Button("Зберегти підключення") { confirmServer = true }
+                    Button("Зберегти підключення") { confirmServer = true }.disabled(chat.checkingConnection)
                 }
                 Section("Локальний AI · Preview") {
                     Toggle("Локальна генерація", isOn: Binding(get: { chat.localMode }, set: { chat.configureLocal(enabled: $0, profile: chat.localProfile) }))
@@ -251,7 +264,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.5.5")
+                    Text("Crimson Core Minimal · 0.5.6")
                     Text("Rust Core " + coreVersion)
                 }
             }
@@ -274,7 +287,7 @@ struct FoundationView: View {
             .alert("Підтвердити сервер?", isPresented: $confirmServer) {
                 Button("Скасувати", role: .cancel) {}
                 Button("Зберегти") {
-                    do { try chat.configure(endpoint: endpoint, model: model); settingsError = ""; settings = false }
+                    do { try chat.configure(endpoint: endpoint, model: model, desktop: desktop, key: sessionKey); sessionKey = ""; settingsError = ""; if !desktop { settings = false } }
                     catch { settingsError = error.localizedDescription }
                 }
             } message: { Text("Повідомлення та контекст будуть передаватися на " + endpoint) }
