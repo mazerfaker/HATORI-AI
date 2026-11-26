@@ -1,0 +1,12 @@
+<resources>
+    <style name="HatorielMinimal" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">#EE3434</item>
+        <item name="android:colorControlActivated">#EE3434</item>
+        <item name="android:windowBackground">#1C1C1E</item>
+        <item name="android:statusBarColor">#141416</item>
+        <item name="android:navigationBarColor">#141416</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorButtonNormal">#2B2B2E</item>
+    </style>
+</resources>
