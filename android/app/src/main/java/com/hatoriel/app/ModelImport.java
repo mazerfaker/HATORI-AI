@@ -14,6 +14,7 @@ final class ModelImport {
     static File selected(Context context)throws IOException{
         return new File(directory(context),"local.gguf");
     }
+    static synchronized boolean remove(Context context)throws IOException{File f=selected(context);return !f.exists()||f.delete();}
     static synchronized long copy(Context context,Uri uri)throws IOException{
         File dir=directory(context),dest=selected(context),tmp=File.createTempFile("import-",".tmp",dir);
         try(InputStream in=context.getContentResolver().openInputStream(uri)){
