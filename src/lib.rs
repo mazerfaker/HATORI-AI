@@ -14,3 +14,6 @@ pub mod emotion;
 pub mod style;
 
 pub mod proactive;
+
+pub mod core;
+pub mod memory_suggest;
