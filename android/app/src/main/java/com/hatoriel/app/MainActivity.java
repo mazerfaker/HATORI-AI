@@ -13,7 +13,7 @@ public final class MainActivity extends Activity {
     private final int accent=CrimsonAvatar.RED;
     private CrimsonAvatar avatar;
     private ScrollView settingsScroll;
-    private LinearLayout composer;
+    private LinearLayout composer, bottomNav;
     private TextView draftView;
     private Button retry;
     private String draftText="";
@@ -62,12 +62,13 @@ public final class MainActivity extends Activity {
     private void busy(boolean value){send.setEnabled(ready&&!value);stop.setEnabled(value);clear.setEnabled(!value);memoryButton.setEnabled(!value);hardwareButton.setEnabled(!value&&!importing);retry.setEnabled(ready&&!value&&history.length()>0);endpoint.setEnabled(!value);modelField.setEnabled(!value);bridgeKeyField.setEnabled(!value);importModel.setEnabled(!value&&!importing);}
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
+        if(android.os.Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
         prefs=getSharedPreferences("hatoriel_chat",MODE_PRIVATE);memory=new MobileMemory(prefs);
         base=prefs.getString("endpoint","http://127.0.0.1:11434");model=prefs.getString("model","qwen2.5:3b");
         try{history=new JSONArray(prefs.getString("history","[]"));}catch(JSONException ignored){history=new JSONArray();}
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(0xff1c1c1e);
         root.setPadding(dp(14),dp(12),dp(14),dp(12));
-        root.setOnApplyWindowInsetsListener((v,insets)->{if(android.os.Build.VERSION.SDK_INT>=30){android.graphics.Insets bars=insets.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.ime());v.setPadding(dp(14)+bars.left,dp(12)+bars.top,dp(14)+bars.right,dp(12)+bars.bottom);}return insets;});
+        root.setOnApplyWindowInsetsListener((v,insets)->{if(android.os.Build.VERSION.SDK_INT>=30){android.graphics.Insets bars=insets.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.ime());v.setPadding(dp(14)+bars.left,dp(12)+bars.top,dp(14)+bars.right,dp(12)+bars.bottom);if(bottomNav!=null)bottomNav.setVisibility(insets.isVisible(android.view.WindowInsets.Type.ime())?View.GONE:View.VISIBLE);}return insets;});
         if(android.os.Build.VERSION.SDK_INT<30)root.setFitsSystemWindows(true);
         LinearLayout header=new LinearLayout(this);header.setOrientation(LinearLayout.HORIZONTAL);header.setGravity(android.view.Gravity.CENTER_VERTICAL);root.addView(header);
         avatar=new CrimsonAvatar(this);header.addView(avatar,new LinearLayout.LayoutParams(dp(56),dp(56)));
@@ -81,7 +82,7 @@ public final class MainActivity extends Activity {
         Button reminders=new Button(this);reminders.setText("Завдання");reminders.setOnClickListener(v->showReminders());
         settingsScroll=new ScrollView(this);settingsScroll.setVisibility(View.GONE);
         settings=new LinearLayout(this);settings.setOrientation(LinearLayout.VERTICAL);settingsScroll.addView(settings);root.addView(settingsScroll,new LinearLayout.LayoutParams(-1,0,1));
-        endpoint=field(base,"URL Ollama-сервера");modelField=field(model,"Назва моделі");settings.addView(endpoint);settings.addView(modelField);bridgeKeyField=field(base.equals(bridgeEndpoint)?bridgeKey:"","Ключ сеансу Hatoriel (необов’язково)");bridgeKeyField.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);settings.addView(bridgeKeyField);settings.addView(label("Для шлюзу ПК потрібен HTTPS і ключ із розділу «Пристрої». Ключ зберігається лише в оперативній пам’яті до завершення процесу.",12));
+        endpoint=field(base,"URL Ollama-сервера");modelField=field(model,"Назва моделі");settings.addView(endpoint);settings.addView(modelField);bridgeKeyField=field(base.equals(bridgeEndpoint)?bridgeKey:"","Ключ сеансу Hatoriel (необов’язково)");bridgeKeyField.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);bridgeKeyField.setSaveEnabled(false);settings.addView(bridgeKeyField);settings.addView(label("Для шлюзу ПК потрібен HTTPS і ключ із розділу «Пристрої». Ключ зберігається лише в оперативній пам’яті до завершення процесу.",12));
         settings.addView(label("HTTP дозволено лише на цьому телефоні. HTTPS — для явно вибраного сервера. Історія надсилається на вибраний сервер.",12));
         Button save=new Button(this);save.setText("Зберегти підключення");settings.addView(save);
         config.setOnClickListener(v->showSettings(settingsScroll.getVisibility()!=View.VISIBLE));
@@ -101,7 +102,7 @@ public final class MainActivity extends Activity {
         scroll=new ScrollView(this);messages=new LinearLayout(this);messages.setOrientation(LinearLayout.VERTICAL);scroll.addView(messages);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         composer=new LinearLayout(this);composer.setOrientation(LinearLayout.VERTICAL);root.addView(composer);input=new EditText(this);input.setHint("Напиши повідомлення…");input.setMinLines(1);input.setMaxLines(4);composer.addView(input);
         LinearLayout buttons=new LinearLayout(this);send=new Button(this);send.setText("Надіслати");stop=new Button(this);stop.setText("Зупинити");buttons.addView(send,new LinearLayout.LayoutParams(0,-2,1));buttons.addView(stop,new LinearLayout.LayoutParams(0,-2,1));composer.addView(buttons);send.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xffa81920));retry=new Button(this);retry.setText("Повторити останній запит");composer.addView(retry);retry.setOnClickListener(v->retryLast());
-        LinearLayout nav=new LinearLayout(this);nav.setOrientation(LinearLayout.HORIZONTAL);nav.setBackgroundColor(0xff242426);root.addView(nav);
+        LinearLayout nav=new LinearLayout(this);bottomNav=nav;nav.setOrientation(LinearLayout.HORIZONTAL);nav.setBackgroundColor(0xff242426);root.addView(nav);
         Button chat=new Button(this);chat.setText("Чат");chat.setOnClickListener(v->showSettings(false));
         for(Button btn:new Button[]{chat,memoryButton,hardwareButton,reminders,config}){btn.setTextSize(11);btn.setAllCaps(false);btn.setMinWidth(0);btn.setMinimumWidth(0);btn.setPadding(0,0,0,0);nav.addView(btn,new LinearLayout.LayoutParams(0,dp(52),1));}
         try{status.setText("Rust Core "+NativeCore.version()+" · "+base);ready=true;}catch(LinkageError e){status.setText("Rust Core недоступне: "+e.getMessage());}
@@ -139,7 +140,7 @@ public final class MainActivity extends Activity {
         if(!MobileReminders.permitted(this))keep=false;
         try{
             GenerationSession.start(this,data,server,selectedModel,server.equals(bridgeEndpoint)?bridgeKey:"",keep,replaceExpected);
-            if(keep){try{startForegroundService(new android.content.Intent(this,GenerationService.class));}catch(RuntimeException e){GenerationSession.background=false;GenerationSession.status="Фоновий сервіс недоступний; генерація лише у відкритому чаті";GenerationSession.revision++;}}
+            if(keep){try{startForegroundService(new android.content.Intent(this,GenerationService.class).putExtra("job",GenerationSession.job));}catch(RuntimeException e){GenerationSession.background=false;GenerationSession.status="Фоновий сервіс недоступний; генерація лише у відкритому чаті";GenerationSession.revision++;}}
             syncSession();
         }catch(RuntimeException e){status.setText("Помилка: "+e.getMessage());}
     }
