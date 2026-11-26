@@ -13,7 +13,7 @@ final class GenerationSession {
     static ChatTransport active;
     static String partial="",status="";
     static boolean background;
-    static long revision,job;
+    static long revision,job=new java.security.SecureRandom().nextLong() & Long.MAX_VALUE;
     static void start(Context context,String data,String server,String model,String sessionKey,boolean keepRunning,String replaceExpected){
         if(active!=null)throw new IllegalStateException("Generation already active");
         Context app=context.getApplicationContext();
@@ -52,5 +52,5 @@ final class GenerationSession {
             });
         },"hatoriel-inference").start();
     }
-    static void cancel(){if(active!=null){active.cancel();status="Зупинення…";revision++;}}
+    static void cancel(){if(active!=null&&!active.isCancelled()){active.cancel();status="Зупинення…";revision++;}}
 }
