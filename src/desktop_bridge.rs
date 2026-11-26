@@ -38,6 +38,10 @@ fn handle(mut req:Request,client:&reqwest::blocking::Client,model:&str,secret:&s
  let expected=format!("Bearer {secret}");
  let authorized=req.headers().iter().any(|h|h.field.equiv("Authorization")&&same(h.value.as_str(),&expected));
  if !authorized{reply(req,401,"Unauthorized");return;}
+ if req.method()==&Method::Get&&req.url()=="/api/status"{
+  let header=Header::from_bytes(&b"Content-Type"[..],&b"application/json"[..]).expect("static header");
+  let _=req.respond(Response::from_string(json!({"service":"hatoriel-desktop","protocol":1,"model":model,"backend":"ollama"}).to_string()).with_header(header));return;
+ }
  if req.method()!=&Method::Post||req.url()!="/api/chat"{reply(req,404,"Unsupported endpoint");return;}
  let Some(len)=req.body_length() else{reply(req,411,"Content-Length required");return;};
  if len==0||len>LIMIT{reply(req,413,"Request too large");return;}
