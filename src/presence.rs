@@ -30,7 +30,7 @@ impl Presence {
         p
     }
     pub fn available(&self)->bool { #[cfg(windows)] {self.tray.is_some()} #[cfg(not(windows))] {false} }
-    pub fn hide(&mut self, ctx:&egui::Context) { if self.available() { self.hidden=true; ctx.send_viewport_cmd(Cmd::Visible(false)); } }
+    pub fn hide(&mut self, ctx:&egui::Context) { if self.available() { self.hidden=true; ctx.send_viewport_cmd(Cmd::Minimized(true)); } }
     fn restore(&mut self,ctx:&egui::Context) { self.hidden=false; ctx.send_viewport_cmd(Cmd::Visible(true)); ctx.send_viewport_cmd(Cmd::Minimized(false)); ctx.send_viewport_cmd(Cmd::Focus); }
     pub fn update(&mut self,ctx:&egui::Context,cfg:&mut Config,busy:bool)->bool {
         let mut changed=false;
@@ -44,6 +44,7 @@ impl Presence {
         if !self.exiting && self.available() && cfg.minimize_to_tray {
             if ctx.input(|i|i.viewport().close_requested()) {ctx.send_viewport_cmd(Cmd::CancelClose);self.hide(ctx);}
             if !self.hidden && ctx.input(|i|i.viewport().minimized==Some(true)) {self.hide(ctx);}
+            if self.hidden && ctx.input(|i|i.viewport().minimized==Some(false)) {self.hidden=false;}
         }
         if cfg.avatar && !self.exiting {
             ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("hatori-avatar"),egui::ViewportBuilder::default().with_title("HATORI Avatar").with_inner_size([180.,205.]).with_decorations(false).with_transparent(true).with_resizable(false).with_always_on_top(),|ctx,_class| {
@@ -53,6 +54,7 @@ impl Presence {
                     if response.drag_started(){ctx.send_viewport_cmd(Cmd::StartDrag);}
                     let p=ui.painter();let c=r.center();let t=ctx.input(|i|i.time) as f32;
                     let color=if busy {Color32::from_rgb(255,184,92)} else {Color32::from_rgb(92,228,213)};
+                    if busy {for k in 0..3 {let phase=(t*1.6+k as f32/3.).fract();p.circle_stroke(c,25.+phase*50.,egui::Stroke::new(2.,color.gamma_multiply(1.-phase)));}}
                     for k in 0..3 {p.circle_stroke(c,40.+k as f32*13.,egui::Stroke::new(1.,color.gamma_multiply(0.6)));}
                     let points=(0..6).map(|i|{let a=t*0.5+i as f32*std::f32::consts::TAU/6.;c+egui::vec2(a.cos(),a.sin())*48.}).collect();
                     p.add(egui::Shape::closed_line(points,egui::Stroke::new(2.,color)));p.circle_filled(c,12.+(t*3.).sin()*4.,color);
