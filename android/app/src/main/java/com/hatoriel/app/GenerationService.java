@@ -17,7 +17,7 @@ public final class GenerationService extends Service {
     }};
     @Override public IBinder onBind(Intent i){return null;}
     @Override public int onStartCommand(Intent intent,int flags,int startId){
-        if(intent!=null&&STOP.equals(intent.getAction())){if(intent.getLongExtra("job",-1)==GenerationSession.job)GenerationSession.cancel();if(owner==GenerationSession.job)stopSelf();return START_NOT_STICKY;}
+        if(intent!=null&&STOP.equals(intent.getAction())){if(intent.getLongExtra("job",-1)==GenerationSession.job){GenerationSession.cancel();stopSelf();}else if(owner<0){stopSelf();}return START_NOT_STICKY;}
         NotificationManager nm=getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(CHANNEL,"Генерація Hatoriel",NotificationManager.IMPORTANCE_LOW));
         PendingIntent open=PendingIntent.getActivity(this,601,new Intent(this,MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP),PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
