@@ -87,4 +87,11 @@ enum NativeCore {
            let error = failure["error"] { throw CoreFailure.rejected(error) }
         return try JSONDecoder().decode(CoreOutput.self, from: data)
     }
+    static func suggestMemory(_ text: String) throws -> MemorySuggestion? {
+        let input = Data(text.utf8)
+        let output = try input.withUnsafeBytes { buffer in
+            try consume(hatoriel_suggest_memory(buffer.bindMemory(to: UInt8.self).baseAddress, buffer.count))
+        }
+        return try JSONDecoder().decode(MemorySuggestion?.self, from: Data(output.utf8))
+    }
 }
