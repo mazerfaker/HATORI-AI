@@ -24,6 +24,10 @@ struct ChatEntry: Codable, Identifiable {
     @Published private(set) var memory = MemoryVault()
     @Published private(set) var memoryError: String? = nil
     @Published private(set) var suggestion: MemorySuggestion? = nil
+    @Published private(set) var desktopMode = false
+    @Published private(set) var connectionStatus = "Не перевірено"
+    @Published private(set) var checkingConnection = false
+    private var sessionKey = ""
     private var worker: Task<Void, Never>?
     private var generation: UUID?
     private let defaults = UserDefaults.standard
@@ -40,6 +44,8 @@ struct ChatEntry: Codable, Identifiable {
         reloadMemory()
         endpoint = defaults.string(forKey: "chat.endpoint") ?? ""
         model = defaults.string(forKey: "chat.model") ?? "qwen2.5:3b"
+        desktopMode = defaults.bool(forKey: "chat.desktopMode")
+        if desktopMode { connectionStatus = "Введи новий ключ сеансу ПК" }
         if let data = defaults.data(forKey: "chat.history"), data.count <= 4_194_304,
            let entries = try? JSONDecoder().decode([ChatEntry].self, from: data) {
             history = Array(entries.suffix(100))
@@ -81,7 +87,7 @@ struct ChatEntry: Codable, Identifiable {
     }
     private func validateBackend() throws {
         if localMode { try LocalModel.verify(localSize, profile: localProfile) }
-        else { _ = try ChatTransport.endpoint(endpoint) }
+        else { _ = try ChatTransport.endpoint(endpoint); if desktopMode { try ChatTransport.validateKey(sessionKey) } }
     }
     func reloadMemory() {
         guard !busy else { return }
@@ -127,24 +133,50 @@ struct ChatEntry: Codable, Identifiable {
     private func persistOptions() {
         if let data = try? JSONEncoder().encode(options) { defaults.set(data, forKey: "core.options") }
     }
-    func configure(endpoint: String, model: String) throws {
-        guard !busy else { return }
+    func configure(endpoint: String, model: String, desktop: Bool, key: String) throws {
+        guard !busy && !checkingConnection else { throw CoreFailure.rejected("Зачекай завершення поточної операції.") }
         _ = try ChatTransport.endpoint(endpoint)
         let name = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.utf8.count <= 256 else { throw CoreFailure.rejected("Вкажи назву моделі (до 256 байтів).") }
         let newEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if newEndpoint != self.endpoint && memoryError == nil && memory.approvedEndpoint != nil {
-            try updateMemory { $0.approvedEndpoint = nil }
+        let candidate = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if desktop { try ChatTransport.validateKey(candidate) }
+        if newEndpoint != self.endpoint || desktop != desktopMode {
+            guard memoryError == nil else { throw CoreFailure.rejected("Спочатку віднови доступ до сховища пам’яті, щоб безпечно змінити сервер.") }
+            if memory.approvedEndpoint != nil { try updateMemory { $0.approvedEndpoint = nil } }
         }
+        desktopMode = desktop
+        sessionKey = desktop ? candidate : ""
+        defaults.set(desktop, forKey: "chat.desktopMode")
+        connectionStatus = "Не перевірено"
         self.endpoint = newEndpoint
         self.model = name
         defaults.set(self.endpoint, forKey: "chat.endpoint")
         defaults.set(name, forKey: "chat.model")
         status = "Сервер налаштовано; з'єднання ще не перевірено"
     }
+    func checkDesktop() async {
+        guard desktopMode && !busy && !checkingConnection else { return }
+        checkingConnection = true
+        defer { checkingConnection = false }
+        connectionStatus = "Перевірка шлюзу…"
+        do {
+            let info = try await ChatTransport.probe(base: endpoint, key: sessionKey)
+            if info.model == model { connectionStatus = "Шлюз авторизовано · " + info.model }
+            else { connectionStatus = "Модель ПК відрізняється: " + info.model }
+        } catch {
+            connectionStatus = "Перевірка: " + error.localizedDescription
+        }
+    }
+    func forgetDesktopKey() {
+        guard !busy && !checkingConnection else { return }
+        sessionKey = ""
+        connectionStatus = "Ключ видалено з пам’яті"
+    }
+    var hasDesktopKey: Bool { !sessionKey.isEmpty }
     @discardableResult func send(_ text: String) -> Bool {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !busy, !importing, !value.isEmpty else { return false }
+        guard !busy, !importing, !checkingConnection, !value.isEmpty else { return false }
         guard value.unicodeScalars.count <= 12000 else { status = "Максимум 12000 символів"; return false }
         do { try validateBackend() }
         catch { status = error.localizedDescription; return false }
@@ -174,14 +206,14 @@ struct ChatEntry: Codable, Identifiable {
         partial = ""; busy = false; status = "Зупинено"
     }
     private func start(replace: UUID?) {
-        guard !busy && !importing else { return }
+        guard !busy && !importing && !checkingConnection else { return }
         do { try validateBackend() }
         catch { status = error.localizedDescription; return }
         let source = replace == nil ? history : Array(history.dropLast())
         var context = source.suffix(32).map { CoreMessage(role: $0.role, content: $0.content) }
         while context.count > 1 && ((try? JSONEncoder().encode(context).count) ?? Int.max) > 240000 { context.removeFirst() }
         let useMemory = memoryError == nil && memory.allows(local: localMode, endpoint: endpoint)
-        let snapshot = CoreContext(history: context, options: options, memories: useMemory ? memory.records.map(\.core) : [], profile: useMemory ? memory.profile : CoreProfile()), server = endpoint, selectedModel = model, id = UUID(), useLocal = localMode, profile = localProfile
+        let snapshot = CoreContext(history: context, options: options, memories: useMemory ? memory.records.map(\.core) : [], profile: useMemory ? memory.profile : CoreProfile()), server = endpoint, selectedModel = model, id = UUID(), useLocal = localMode, profile = localProfile, key = desktopMode ? sessionKey : ""
         generation = id; busy = true; partial = ""; status = "Hatoriel думає…"
         worker = Task { [weak self] in
             do {
@@ -199,7 +231,7 @@ struct ChatEntry: Codable, Identifiable {
                 if useLocal {
                     reply = try await LocalRuntime.generate(messages: prepared.messages, profile: profile, onPartial: update)
                 } else {
-                    reply = try await ChatTransport.generate(base: server, model: selectedModel, messages: prepared.messages, onPartial: update)
+                    reply = try await ChatTransport.generate(base: server, model: selectedModel, messages: prepared.messages, sessionKey: key, onPartial: update)
                 }
                 guard let self, self.generation == id else { return }
                 let old = self.history
