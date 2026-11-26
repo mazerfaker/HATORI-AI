@@ -25,6 +25,9 @@ public final class MainActivity extends Activity {
     private EditText input, endpoint, modelField;
     private Button send,stop,clear;
     private ChatTransport active;
+    private final android.os.Handler sessionHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private long sessionRevision=-1;
+    private final Runnable sessionWatch=new Runnable(){public void run(){syncSession();sessionHandler.postDelayed(this,150);}};
     private boolean ready,destroyed,importing;
     private TextView localModelStatus;
     private Button importModel;
@@ -76,14 +79,17 @@ public final class MainActivity extends Activity {
         importModel=new Button(this);importModel.setText("Імпортувати GGUF");settings.addView(importModel);
         importModel.setOnClickListener(v->{if(importing||active!=null)return;new AlertDialog.Builder(this).setTitle("Імпорт локальної моделі").setMessage("Файл копіюється в приватне сховище Hatoriel. Попередня локальна модель буде замінена після успішного імпорту. Запуск моделі ще експериментальний і не підключений.").setNegativeButton("Скасувати",null).setPositiveButton("Обрати файл",(d,w)->{android.content.Intent intent=new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);intent.setType("*/*");intent.addCategory(android.content.Intent.CATEGORY_OPENABLE);try{startActivityForResult(intent,71);}catch(android.content.ActivityNotFoundException e){status.setText("Файловий менеджер недоступний");}}).show();});
         refreshLocalModel();
+        CheckBox background=new CheckBox(this);background.setText("Продовжувати генерацію після згортання");background.setChecked(prefs.getBoolean("background_generation",false));settings.addView(background);
+        background.setOnCheckedChangeListener((b,value)->{prefs.edit().putBoolean("background_generation",value).apply();if(value&&android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},46);});
+        settings.addView(label("Фоновий режим лише для поточного запиту, до 5 хвилин. Постійний індикатор Android дозволяє зупинити генерацію.",12));
         clear=new Button(this);clear.setText("Очистити історію");settings.addView(clear);
         clear.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну історію?").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(active==null){history=new JSONArray();prefs.edit().remove("history").apply();render();}}).show());
         scroll=new ScrollView(this);messages=new LinearLayout(this);messages.setOrientation(LinearLayout.VERTICAL);scroll.addView(messages);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         input=new EditText(this);input.setHint("Напиши повідомлення…");input.setMinLines(2);input.setMaxLines(4);root.addView(input);
         LinearLayout buttons=new LinearLayout(this);send=new Button(this);send.setText("Надіслати");stop=new Button(this);stop.setText("Зупинити");buttons.addView(send,new LinearLayout.LayoutParams(0,-2,1));buttons.addView(stop,new LinearLayout.LayoutParams(0,-2,1));root.addView(buttons);send.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xff68263a));retry=new Button(this);retry.setText("Повторити останній запит");root.addView(retry);retry.setOnClickListener(v->retryLast());
         try{status.setText("Rust Core "+NativeCore.version()+" · "+base);ready=true;}catch(LinkageError e){status.setText("Rust Core недоступне: "+e.getMessage());}
-        send.setOnClickListener(v->generate());stop.setOnClickListener(v->{if(active!=null){active.cancel();status.setText("Зупинення…");}});
-        setContentView(root);root.requestApplyInsets();render();busy(false);MobileReminders.channel(this);
+        send.setOnClickListener(v->generate());stop.setOnClickListener(v->{GenerationSession.cancel();syncSession();});
+        setContentView(root);root.requestApplyInsets();render();busy(false);syncSession();MobileReminders.channel(this);
     }
     private void generate(){
         String query=input.getText().toString().trim();if(!ready||active!=null||query.isEmpty())return;
@@ -106,19 +112,27 @@ public final class MainActivity extends Activity {
         // Bound the JNI input while retaining the newest user message.
         while(context.length()>1&&context.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>240000)context.remove(0);
         final String data;try{data=memory.context(context);}catch(JSONException e){status.setText(e.toString());return;}final String server=base,selectedModel=model;
-        ChatTransport transport=new ChatTransport();active=transport;draftText="";render();busy(true);status.setText("Hatoriel думає…");
-        new Thread(()->{
-            String reply=null,error=null;
-            try{String prepared=NativeCore.prepareMemory(data);if(prepared==null||!prepared.startsWith("["))throw new IllegalStateException("Core: "+prepared);
-                final long[] lastUpdate={0};reply=transport.request(server,selectedModel,new JSONArray(prepared),partial->{long now=android.os.SystemClock.elapsedRealtime();if(now-lastUpdate[0]<60)return;lastUpdate[0]=now;runOnUiThread(()->{if(destroyed||active!=transport||transport.isCancelled())return;draftText=partial;draftView.setText(partial);scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));});});
-            }catch(Exception|LinkageError e){error=e.getMessage()==null?e.toString():e.getMessage();}
-            final String result=reply,failure=error;
-            runOnUiThread(()->{if(destroyed||active!=transport)return;active=null;draftText="";render();busy(false);
-                if(transport.isCancelled()){status.setText("Зупинено");return;}
-                if(failure!=null){status.setText("Помилка: "+failure);return;}
-                try{append("assistant",result);render();busy(false);status.setText("Готово");send.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);}catch(JSONException e){status.setText(e.toString());}
-            });
-        },"hatoriel-inference").start();
+        boolean keep=prefs.getBoolean("background_generation",false);
+        android.os.PowerManager power=getSystemService(android.os.PowerManager.class);
+        if(power!=null&&power.isPowerSaveMode())keep=false;
+        if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)keep=false;
+        try{
+            GenerationSession.start(this,data,server,selectedModel,keep);
+            if(keep){try{startForegroundService(new android.content.Intent(this,GenerationService.class));}catch(RuntimeException e){GenerationSession.background=false;GenerationSession.status="Фоновий сервіс недоступний; генерація лише у відкритому чаті";GenerationSession.revision++;}}
+            syncSession();
+        }catch(RuntimeException e){status.setText("Помилка: "+e.getMessage());}
+    }
+    private void syncSession(){
+        if(sessionRevision==GenerationSession.revision)return;
+        sessionRevision=GenerationSession.revision;
+        ChatTransport previous=active;active=GenerationSession.active;
+        draftText=GenerationSession.partial;
+        if(previous!=active||active==null){
+            try{history=new JSONArray(prefs.getString("history","[]"));}catch(JSONException ignored){}
+            render();busy(active!=null);
+            if(previous!=null&&active==null&&"Готово".equals(GenerationSession.status))send.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
+        }else if(draftView!=null){draftView.setText(draftText);scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));}
+        if(!GenerationSession.status.isEmpty())status.setText(GenerationSession.status);
     }
     private void offerMemory(String query){
         if(!memory.suggestions())return;
@@ -177,7 +191,9 @@ public final class MainActivity extends Activity {
         remove.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну модель?").setMessage("Видаляється лише копія в Hatoriel. Початковий файл не змінюється.").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(importing||active!=null)return;try{if(!ModelImport.remove(this))throw new java.io.IOException("Не вдалося видалити");refreshLocalModel();refresh.run();}catch(Exception e){status.setText(e.getMessage());}}).show());
         refresh.run();new AlertDialog.Builder(this).setTitle("Hardware & Model Manager").setView(sv).setPositiveButton("Закрити",null).show();
     }
-    @Override protected void onResume(){super.onResume();MobileReminders.channel(this);MobileReminders.schedule(this);}
+    @Override protected void onResume(){super.onResume();syncSession();sessionHandler.removeCallbacks(sessionWatch);sessionHandler.post(sessionWatch);MobileReminders.channel(this);MobileReminders.schedule(this);}
+    @Override protected void onPause(){sessionHandler.removeCallbacks(sessionWatch);super.onPause();}
+    @Override protected void onStop(){if(!GenerationSession.background&&!isChangingConfigurations())GenerationSession.cancel();super.onStop();}
     @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){super.onRequestPermissionsResult(request,permissions,results);if(request==45){MobileReminders.schedule(this);if(!MobileReminders.permitted(this))Toast.makeText(this,"Сповіщення не дозволено",Toast.LENGTH_LONG).show();}}
     private void showReminders(){
         ScrollView sv=new ScrollView(this);LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(20),dp(8),dp(20),dp(8));sv.addView(panel);
@@ -201,5 +217,5 @@ public final class MainActivity extends Activity {
     }
     private void refreshLocalModel(){try{java.io.File file=ModelImport.selected(this);localModelStatus.setText(file.isFile()?String.format(java.util.Locale.ROOT,"GGUF: %.2f GiB · імпортовано, запуск ще недоступний",file.length()/1073741824.0):"GGUF не імпортовано");}catch(java.io.IOException e){localModelStatus.setText(e.getMessage());}}
     @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);hardwareButton.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);hardwareButton.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
-    @Override protected void onDestroy(){destroyed=true;if(importWorker!=null)importWorker.interrupt();if(active!=null)active.cancel();super.onDestroy();}
+    @Override protected void onDestroy(){destroyed=true;if(importWorker!=null)importWorker.interrupt();sessionHandler.removeCallbacks(sessionWatch);if(isFinishing()&&!GenerationSession.background)GenerationSession.cancel();super.onDestroy();}
 }
