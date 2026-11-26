@@ -12,6 +12,8 @@ struct ChatEntry: Codable, Identifiable {
     @Published private(set) var history: [ChatEntry] = []
     @Published private(set) var partial = ""
     @Published private(set) var busy = false
+    @Published private(set) var feedbackState: CrimsonState = .idle
+    @Published private(set) var feedbackRevision = 0
     @Published var status = "Налаштуй HTTPS-сервер для діалогу"
     @Published private(set) var endpoint = ""
     @Published private(set) var model = "qwen2.5:3b"
@@ -240,7 +242,7 @@ struct ChatEntry: Codable, Identifiable {
         guard busy else { return }
         generation = nil
         worker?.cancel(); worker = nil
-        partial = ""; busy = false; status = "Зупинено"
+        partial = ""; busy = false; status = "Зупинено"; feedbackState = .cancelled; feedbackRevision += 1
     }
     private func start(replace: UUID?) {
         guard !busy && !importing && !checkingConnection else { return }
@@ -251,7 +253,7 @@ struct ChatEntry: Codable, Identifiable {
         while context.count > 1 && ((try? JSONEncoder().encode(context).count) ?? Int.max) > 240000 { context.removeFirst() }
         let useMemory = memoryError == nil && memory.allows(local: localMode, endpoint: endpoint)
         let snapshot = CoreContext(history: context, options: options, memories: useMemory ? memory.records.map(\.core) : [], profile: useMemory ? memory.profile : CoreProfile()), server = endpoint, selectedModel = model, id = UUID(), useLocal = localMode, profile = localProfile, key = desktopMode ? sessionKey : ""
-        generation = id; busy = true; partial = ""; status = "Hatoriel думає…"
+        generation = id; busy = true; partial = ""; status = "Hatoriel думає…"; feedbackState = .thinking
         worker = Task { [weak self] in
             do {
                 let prepared = try await Task.detached(priority: .userInitiated) { try NativeCore.prepareContext(snapshot) }.value
@@ -261,6 +263,7 @@ struct ChatEntry: Codable, Identifiable {
                 let update: @MainActor (String) -> Void = { [weak self] text in
                     guard let self, self.generation == id else { return }
                     self.partial = text
+                    if !text.isEmpty { self.feedbackState = .responding }
                 }
                 let reply: String
                 if useLocal {
@@ -276,14 +279,14 @@ struct ChatEntry: Codable, Identifiable {
                 }
                 self.history.append(ChatEntry(role: "assistant", content: reply))
                 do { try self.persist() } catch { self.history = old; throw error }
-                self.finish(id, status: "Готово")
+                self.finish(id, status: "Готово", outcome: .completed)
             } catch {
-                self?.finish(id, status: Task.isCancelled ? "Зупинено" : "Помилка: " + error.localizedDescription)
+                self?.finish(id, status: Task.isCancelled ? "Зупинено" : "Помилка: " + error.localizedDescription, outcome: Task.isCancelled ? .cancelled : .failed)
             }
         }
     }
-    private func finish(_ id: UUID, status: String) {
+    private func finish(_ id: UUID, status: String, outcome: CrimsonState) {
         guard generation == id else { return }
-        generation = nil; worker = nil; busy = false; partial = ""; self.status = status
+        generation = nil; worker = nil; busy = false; partial = ""; self.status = status; feedbackState = outcome; feedbackRevision += 1
     }
 }
