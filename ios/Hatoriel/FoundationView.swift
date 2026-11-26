@@ -261,13 +261,14 @@ struct FoundationView: View {
                     Text("Налаштування особистості використовуються у контексті, який надсилається підтвердженому AI-серверу.").font(.footnote)
                     Button("Відновити базові риси") { personality = CoreOptions() }
                     Button("Зберегти особистість") { chat.configurePersonality(personality); personality = chat.options }
+                    Text(chat.status).font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Дані") {
                     Button("Очистити історію", role: .destructive) { confirmClear = true }
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.5.7")
+                    Text("Crimson Core Minimal · 0.5.7.1")
                     Text("Rust Core " + coreVersion)
                 }
             }
