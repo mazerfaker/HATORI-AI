@@ -54,3 +54,13 @@ pub unsafe extern "C" fn hatoriel_suggest_memory(data:*const u8,len:usize)->*mut
  #[test]fn suggestion_utf8(){let s="Я люблю гітару";unsafe{let p=hatoriel_suggest_memory(s.as_ptr(),s.len());let v:serde_json::Value=serde_json::from_str(std::ffi::CStr::from_ptr(p).to_str().unwrap()).unwrap();assert_eq!(v["category"],"Interests");hatoriel_free(p);}}
  #[test]fn no_suggestion(){let s="Привіт";unsafe{let p=hatoriel_suggest_memory(s.as_ptr(),s.len());assert_eq!(std::ffi::CStr::from_ptr(p).to_str().unwrap(),"null");hatoriel_free(p);}}
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn hatoriel_sync(data:*const u8,len:usize)->*mut c_char{
+ let result=std::panic::catch_unwind(||->Result<String,String>{
+ if data.is_null()||len==0||len>3*1024*1024{return Err("Invalid sync buffer".into());}
+ let input=std::str::from_utf8(unsafe{std::slice::from_raw_parts(data,len)}).map_err(|_|"Invalid UTF-8")?;
+ hatori_ai::sync::command(input)
+ });
+ owned(match result{Ok(Ok(s))=>s,Ok(Err(e))=>serde_json::json!({"error":e}).to_string(),Err(_)=>serde_json::json!({"error":"Sync core failure"}).to_string()})
+}
