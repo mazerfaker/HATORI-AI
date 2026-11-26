@@ -17,11 +17,11 @@ public final class GenerationService extends Service {
     }};
     @Override public IBinder onBind(Intent i){return null;}
     @Override public int onStartCommand(Intent intent,int flags,int startId){
-        if(intent!=null&&STOP.equals(intent.getAction())){GenerationSession.cancel();stopSelf();return START_NOT_STICKY;}
+        if(intent!=null&&STOP.equals(intent.getAction())){if(intent.getLongExtra("job",-1)==GenerationSession.job)GenerationSession.cancel();if(owner==GenerationSession.job)stopSelf();return START_NOT_STICKY;}
         NotificationManager nm=getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(CHANNEL,"Генерація Hatoriel",NotificationManager.IMPORTANCE_LOW));
         PendingIntent open=PendingIntent.getActivity(this,601,new Intent(this,MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP),PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
-        PendingIntent stop=PendingIntent.getService(this,602,new Intent(this,GenerationService.class).setAction(STOP),PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent stop=PendingIntent.getService(this,602,new Intent(this,GenerationService.class).setAction(STOP).setData(android.net.Uri.parse("hatoriel://generation/"+GenerationSession.job)).putExtra("job",GenerationSession.job),PendingIntent.FLAG_IMMUTABLE|PendingIntent.FLAG_UPDATE_CURRENT);
         Notification n=new Notification.Builder(this,CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Hatoriel").setContentText("Триває обробка запиту").setOngoing(true).setVisibility(Notification.VISIBILITY_PRIVATE).setContentIntent(open).addAction(new Notification.Action.Builder(null,"Зупинити",stop).build()).build();
         try{
             if(Build.VERSION.SDK_INT>=29)startForeground(NOTIFICATION,n,ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
