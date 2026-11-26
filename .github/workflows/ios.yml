@@ -1,0 +1,54 @@
+name: Hatoriel iOS CI
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: hatoriel-ios-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Environment
+        run: xcodebuild -version && swift --version && rustc --version
+      - name: Rust Core tests
+        run: |
+          cargo test --no-default-features --lib
+          cargo test --manifest-path ios/native/Cargo.toml --lib
+      - name: Build XCFramework
+        run: bash ios/build-core.sh
+      - name: Generate Xcode project
+        run: cd ios && xcodegen generate
+      - name: Build simulator app
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/Hatoriel.xcodeproj -scheme Hatoriel -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ios/build/derived-sim CODE_SIGNING_ALLOWED=NO build | tee ios/build/simulator-build.log
+      - name: Build unsigned iPhone app
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/Hatoriel.xcodeproj -scheme Hatoriel -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath ios/build/derived-device CODE_SIGNING_ALLOWED=NO build | tee ios/build/device-build.log
+      - name: Package products
+        run: |
+          mkdir -p ios/build/artifacts
+          ditto -c -k --keepParent ios/build/derived-sim/Build/Products/Debug-iphonesimulator/Hatoriel.app ios/build/artifacts/Hatoriel-iOS-Simulator.zip
+          ditto -c -k --keepParent ios/build/derived-device/Build/Products/Debug-iphoneos/Hatoriel.app ios/build/artifacts/Hatoriel-iOS-Unsigned.zip
+          ditto -c -k --keepParent ios/build/HatorielCore.xcframework ios/build/artifacts/HatorielCore.xcframework.zip
+      - uses: actions/upload-artifact@v5
+        with:
+          name: Hatoriel-iOS-Foundation
+          path: ios/build/artifacts/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: Hatoriel-iOS-Build-Logs
+          path: ios/build/*-build.log
+          if-no-files-found: warn
