@@ -17,6 +17,10 @@ struct ChatEntry: Codable, Identifiable {
     @Published private(set) var model = "qwen2.5:3b"
     @Published private(set) var options = CoreOptions()
     @Published private(set) var effectiveTraits: [UInt8] = CoreOptions().traits
+    @Published private(set) var localMode = false
+    @Published private(set) var localProfile: LocalProfile = .balanced
+    @Published private(set) var localSize: Int64 = 0
+    @Published private(set) var importing = false
     private var worker: Task<Void, Never>?
     private var generation: UUID?
     private let defaults = UserDefaults.standard
@@ -27,6 +31,9 @@ struct ChatEntry: Codable, Identifiable {
             options = stored.validated
             effectiveTraits = options.traits
         }
+        localMode = defaults.bool(forKey: "local.enabled")
+        localProfile = LocalProfile(rawValue: defaults.string(forKey: "local.profile") ?? "") ?? .balanced
+        localSize = LocalModel.size()
         endpoint = defaults.string(forKey: "chat.endpoint") ?? ""
         model = defaults.string(forKey: "chat.model") ?? "qwen2.5:3b"
         if let data = defaults.data(forKey: "chat.history"), data.count <= 4_194_304,
@@ -44,6 +51,33 @@ struct ChatEntry: Codable, Identifiable {
         guard data.count <= 4_194_304 else { throw TransportFailure.tooLarge }
         defaults.set(data, forKey: "chat.history")
         history = entries
+    }
+    func configureLocal(enabled: Bool, profile: LocalProfile) {
+        guard !busy && !importing else { return }
+        localMode = enabled; localProfile = profile
+        defaults.set(enabled, forKey: "local.enabled")
+        defaults.set(profile.rawValue, forKey: "local.profile")
+        status = enabled ? "Локальний режим · CPU Preview" : "Мережевий режим"
+    }
+    func importModel(_ url: URL) {
+        guard !busy && !importing else { return }
+        importing = true; status = "Імпорт GGUF…"
+        Task { [weak self] in
+            do {
+                let size = try await Task.detached(priority: .utility) { try LocalModel.importFile(url) }.value
+                self?.localSize = size; self?.status = "GGUF імпортовано"
+            } catch { self?.status = "Імпорт: " + error.localizedDescription }
+            self?.importing = false
+        }
+    }
+    func removeModel() {
+        guard !busy && !importing else { return }
+        do { try LocalModel.remove(); localSize = 0; status = "Локальну копію видалено" }
+        catch { status = error.localizedDescription }
+    }
+    private func validateBackend() throws {
+        if localMode { try LocalModel.verify(localSize, profile: localProfile) }
+        else { _ = try ChatTransport.endpoint(endpoint) }
     }
     func configurePersonality(_ proposed: CoreOptions) {
         guard !busy else { return }
@@ -67,9 +101,9 @@ struct ChatEntry: Codable, Identifiable {
     }
     @discardableResult func send(_ text: String) -> Bool {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !busy, !value.isEmpty else { return false }
+        guard !busy, !importing, !value.isEmpty else { return false }
         guard value.unicodeScalars.count <= 12000 else { status = "Максимум 12000 символів"; return false }
-        do { _ = try ChatTransport.endpoint(endpoint) }
+        do { try validateBackend() }
         catch { status = error.localizedDescription; return false }
         let old = history
         history.append(ChatEntry(role: "user", content: value))
@@ -96,13 +130,13 @@ struct ChatEntry: Codable, Identifiable {
         partial = ""; busy = false; status = "Зупинено"
     }
     private func start(replace: UUID?) {
-        guard !busy else { return }
-        do { _ = try ChatTransport.endpoint(endpoint) }
+        guard !busy && !importing else { return }
+        do { try validateBackend() }
         catch { status = error.localizedDescription; return }
         let source = replace == nil ? history : Array(history.dropLast())
         var context = source.suffix(32).map { CoreMessage(role: $0.role, content: $0.content) }
         while context.count > 1 && ((try? JSONEncoder().encode(context).count) ?? Int.max) > 240000 { context.removeFirst() }
-        let snapshot = CoreContext(history: context, options: options), server = endpoint, selectedModel = model, id = UUID()
+        let snapshot = CoreContext(history: context, options: options), server = endpoint, selectedModel = model, id = UUID(), useLocal = localMode, profile = localProfile
         generation = id; busy = true; partial = ""; status = "Hatoriel думає…"
         worker = Task { [weak self] in
             do {
@@ -112,9 +146,15 @@ struct ChatEntry: Codable, Identifiable {
                 self?.options.mood = prepared.mood
                 self?.effectiveTraits = prepared.effective_traits
                 self?.persistOptions()
-                let reply = try await ChatTransport.generate(base: server, model: selectedModel, messages: prepared.messages) { [weak self] text in
+                let update: @MainActor (String) -> Void = { [weak self] text in
                     guard let self, self.generation == id else { return }
                     self.partial = text
+                }
+                let reply: String
+                if useLocal {
+                    reply = try await LocalRuntime.generate(messages: prepared.messages, profile: profile, onPartial: update)
+                } else {
+                    reply = try await ChatTransport.generate(base: server, model: selectedModel, messages: prepared.messages, onPartial: update)
                 }
                 guard let self, self.generation == id else { return }
                 let old = self.history
