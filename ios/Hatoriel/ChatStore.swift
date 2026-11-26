@@ -21,6 +21,9 @@ struct ChatEntry: Codable, Identifiable {
     @Published private(set) var localProfile: LocalProfile = .balanced
     @Published private(set) var localSize: Int64 = 0
     @Published private(set) var importing = false
+    @Published private(set) var memory = MemoryVault()
+    @Published private(set) var memoryError: String? = nil
+    @Published private(set) var suggestion: MemorySuggestion? = nil
     private var worker: Task<Void, Never>?
     private var generation: UUID?
     private let defaults = UserDefaults.standard
@@ -34,6 +37,7 @@ struct ChatEntry: Codable, Identifiable {
         localMode = defaults.bool(forKey: "local.enabled")
         localProfile = LocalProfile(rawValue: defaults.string(forKey: "local.profile") ?? "") ?? .balanced
         localSize = LocalModel.size()
+        reloadMemory()
         endpoint = defaults.string(forKey: "chat.endpoint") ?? ""
         model = defaults.string(forKey: "chat.model") ?? "qwen2.5:3b"
         if let data = defaults.data(forKey: "chat.history"), data.count <= 4_194_304,
@@ -79,6 +83,41 @@ struct ChatEntry: Codable, Identifiable {
         if localMode { try LocalModel.verify(localSize, profile: localProfile) }
         else { _ = try ChatTransport.endpoint(endpoint) }
     }
+    func reloadMemory() {
+        guard !busy else { return }
+        do { memory = try MemoryVault.load(); memoryError = nil }
+        catch { memoryError = "Пам’ять недоступна: " + error.localizedDescription }
+    }
+    private func updateMemory(_ change: (inout MemoryVault) throws -> Void) throws {
+        guard !busy else { throw CoreFailure.rejected("Дочекайся завершення генерації.") }
+        guard memoryError == nil else { throw CoreFailure.rejected(memoryError ?? "Пам’ять недоступна.") }
+        var proposed = memory
+        try change(&proposed)
+        try proposed.persist()
+        memory = proposed
+    }
+    func saveMemory(id: Int64?, content: String, category: String, importance: UInt8) throws {
+        try updateMemory { try $0.save(id: id, content: content, category: category, importance: importance) }
+    }
+    func removeMemory(_ id: Int64) throws { try updateMemory { $0.records.removeAll { $0.id == id } } }
+    func saveProfile(_ profile: CoreProfile) throws { try updateMemory { try $0.setProfile(profile) } }
+    func setMemoryOptions(local: Bool, suggestions: Bool, remote: Bool) throws {
+        if remote { _ = try ChatTransport.endpoint(endpoint) }
+        try updateMemory { $0.localEnabled = local; $0.suggestionsEnabled = suggestions; $0.approvedEndpoint = remote ? endpoint : nil }
+        if !suggestions { suggestion = nil }
+    }
+    func dismissSuggestion() { suggestion = nil }
+    func approveSuggestion() throws {
+        guard let item = suggestion else { return }
+        try saveMemory(id: nil, content: item.content, category: item.category, importance: item.importance)
+        suggestion = nil
+    }
+    private func proposeMemory(_ text: String) {
+        guard memoryError == nil, memory.suggestionsEnabled, suggestion == nil,
+              let item = try? NativeCore.suggestMemory(text),
+              !memory.records.contains(where: { MemoryVault.normalized($0.content) == MemoryVault.normalized(item.content) }) else { return }
+        suggestion = item
+    }
     func configurePersonality(_ proposed: CoreOptions) {
         guard !busy else { return }
         options = proposed.validated
@@ -93,7 +132,11 @@ struct ChatEntry: Codable, Identifiable {
         _ = try ChatTransport.endpoint(endpoint)
         let name = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.utf8.count <= 256 else { throw CoreFailure.rejected("Вкажи назву моделі (до 256 байтів).") }
-        self.endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if newEndpoint != self.endpoint && memoryError == nil && memory.approvedEndpoint != nil {
+            try updateMemory { $0.approvedEndpoint = nil }
+        }
+        self.endpoint = newEndpoint
         self.model = name
         defaults.set(self.endpoint, forKey: "chat.endpoint")
         defaults.set(name, forKey: "chat.model")
@@ -110,6 +153,7 @@ struct ChatEntry: Codable, Identifiable {
         do { try persist() }
         catch { history = old; status = error.localizedDescription; return false }
         start(replace: nil)
+        proposeMemory(value)
         return true
     }
     func retry() {
@@ -136,7 +180,8 @@ struct ChatEntry: Codable, Identifiable {
         let source = replace == nil ? history : Array(history.dropLast())
         var context = source.suffix(32).map { CoreMessage(role: $0.role, content: $0.content) }
         while context.count > 1 && ((try? JSONEncoder().encode(context).count) ?? Int.max) > 240000 { context.removeFirst() }
-        let snapshot = CoreContext(history: context, options: options), server = endpoint, selectedModel = model, id = UUID(), useLocal = localMode, profile = localProfile
+        let useMemory = memoryError == nil && memory.allows(local: localMode, endpoint: endpoint)
+        let snapshot = CoreContext(history: context, options: options, memories: useMemory ? memory.records.map(\.core) : [], profile: useMemory ? memory.profile : CoreProfile()), server = endpoint, selectedModel = model, id = UUID(), useLocal = localMode, profile = localProfile
         generation = id; busy = true; partial = ""; status = "Hatoriel думає…"
         worker = Task { [weak self] in
             do {
