@@ -18,8 +18,9 @@ final class ChatTransport {
         return uri.resolve("/api/chat").toURL();
     }
     interface Chunk { void accept(String partial); }
-    String request(String base,String model,JSONArray messages,Chunk chunk) throws Exception {
+    String request(String base,String model,JSONArray messages,String sessionKey,Chunk chunk) throws Exception {
         URL url=endpoint(base);
+        if(!sessionKey.isEmpty()&&(!"https".equalsIgnoreCase(url.getProtocol())||!sessionKey.matches("[0-9a-f]{64}")))throw new IOException("Ключ Hatoriel потребує HTTPS і 64 hex-символи");
         if(model.trim().isEmpty())throw new IOException("Вкажи модель");
         HttpURLConnection c=(HttpURLConnection)url.openConnection();
         connection=c;
@@ -29,6 +30,7 @@ final class ChatTransport {
             c.setConnectTimeout(8000);c.setReadTimeout(120000);
             c.setRequestMethod("POST");c.setDoOutput(true);
             c.setRequestProperty("Content-Type","application/json");
+            if(!sessionKey.isEmpty())c.setRequestProperty("Authorization","Bearer "+sessionKey);
             byte[] data=new JSONObject().put("model",model).put("messages",messages).put("stream",true).toString().getBytes(StandardCharsets.UTF_8);
             c.setFixedLengthStreamingMode(data.length);
             try(OutputStream out=c.getOutputStream()){out.write(data);}
