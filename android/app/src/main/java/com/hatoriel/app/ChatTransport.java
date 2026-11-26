@@ -41,5 +41,6 @@ final class ChatTransport {
             return reply;
         } finally {c.disconnect();connection=null;}
     }
+    boolean isCancelled(){return cancelled;}
     void cancel(){cancelled=true;HttpURLConnection c=connection;if(c!=null)c.disconnect();}
 }
