@@ -17,3 +17,19 @@ pub extern "system" fn Java_com_hatoriel_app_NativeCore_prepare(mut env:JNIEnv,_
  let value=match result{Ok(Ok(s))=>s,Ok(Err(e))=>serde_json::json!({"error":e}).to_string(),Err(_)=>"{\"error\":\"Native core failure\"}".into()};
  env.new_string(value).map(|s|s.into_raw()).unwrap_or(null_mut())
 }
+
+#[no_mangle]
+pub extern "system" fn Java_com_hatoriel_app_NativeCore_prepareHistory(mut env:JNIEnv,_class:JClass,input:JString)->jstring{
+ let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<String,String>{
+ let json:String=env.get_string(&input).map_err(|e|e.to_string())?.into();
+ if json.len()>262144{return Err("History exceeds limit".into());}
+ let history:Vec<Message>=serde_json::from_str(&json).map_err(|e|e.to_string())?;
+ if history.len()>32{return Err("Too many messages".into());}
+ let query=history.last().filter(|m|m.role=="user").ok_or("Missing user message")?.content.clone();
+ if query.trim().is_empty()||query.chars().count()>12000{return Err("Invalid user message".into());}
+ let req=core::Request{model:"mobile".into(),mode:"Companion".into(),traits:[90,80,90,90,90,80,70],query,history,memories:vec![],profile:Default::default(),mood:None,dynamic_style:true,embedding_model:None};
+ serde_json::to_string(&core::prepare(&req,&[])).map_err(|e|e.to_string())
+ }));
+ let value=match result{Ok(Ok(s))=>s,Ok(Err(e))=>serde_json::json!({"error":e}).to_string(),Err(_)=>"{\"error\":\"Native core failure\"}".into()};
+ env.new_string(value).map(|s|s.into_raw()).unwrap_or(null_mut())
+}
