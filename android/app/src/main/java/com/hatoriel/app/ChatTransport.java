@@ -9,6 +9,7 @@ final class ChatTransport {
     private volatile boolean cancelled;
     static URL endpoint(String base) throws Exception {
         URI uri=new URI(base.trim());
+        if(uri.getPort()>65535||uri.getPort()==0)throw new IOException("Invalid port");
         String host=uri.getHost();
         boolean loopback="127.0.0.1".equals(host)||"localhost".equalsIgnoreCase(host);
         if(host==null||uri.getUserInfo()!=null||uri.getQuery()!=null||uri.getFragment()!=null||
@@ -32,38 +33,45 @@ final class ChatTransport {
             c.setRequestProperty("Content-Type","application/json");
             if(!sessionKey.isEmpty())c.setRequestProperty("Authorization","Bearer "+sessionKey);
             byte[] data=new JSONObject().put("model",model).put("messages",messages).put("stream",true).toString().getBytes(StandardCharsets.UTF_8);
+            if(data.length>262144)throw new IOException("Request too large");
             c.setFixedLengthStreamingMode(data.length);
             try(OutputStream out=c.getOutputStream()){out.write(data);}
             int code=c.getResponseCode();
             if(code<200||code>=300)throw new IOException("HTTP "+code);
-            StringBuilder reply=new StringBuilder();
-            boolean done=false;
-            int total=0;
-            try(InputStream in=c.getInputStream()){
-                ByteArrayOutputStream line=new ByteArrayOutputStream();
-                int next;byte[] buffer=new byte[4096];
-                while(!done&&(next=in.read(buffer))!=-1){
-                    if(cancelled)throw new InterruptedIOException("Cancelled");
-                    total+=next;if(total>2097152)throw new IOException("Stream too large");
-                    for(int i=0;i<next;i++){
-                        if(buffer[i]!='\n'){line.write(buffer[i]);continue;}
-                        String json=line.toString("UTF-8").trim();line.reset();
-                        if(json.isEmpty())continue;
-                        JSONObject event=new JSONObject(json);
-                        if(event.has("error"))throw new IOException(event.getString("error"));
-                        JSONObject message=event.optJSONObject("message");
-                        if(message!=null){reply.append(message.optString("content",""));if(reply.length()>262144)throw new IOException("Response too large");chunk.accept(reply.toString());}
-                        if(event.optBoolean("done")){done=true;break;}
-                    }
-                }
-                if(!done&&line.size()>0){JSONObject event=new JSONObject(line.toString("UTF-8"));if(event.has("error"))throw new IOException(event.getString("error"));JSONObject message=event.optJSONObject("message");if(message!=null)reply.append(message.optString("content",""));done=event.optBoolean("done");}
-            }
-            if(cancelled)throw new InterruptedIOException("Cancelled");
-            if(reply.length()>262144)throw new IOException("Response too large");
-            if(!done)throw new IOException("Incomplete stream");
-            if(reply.toString().trim().isEmpty())throw new IOException("Empty response");
-            return reply.toString();
+            try(InputStream in=c.getInputStream()){return decode(in,chunk,()->cancelled);}
         } finally {c.disconnect();connection=null;}
+    }
+    static String decode(InputStream in,Chunk chunk,java.util.function.BooleanSupplier cancelled)throws Exception{
+        final int maxBytes=2097152,maxChars=262144;
+        ByteArrayOutputStream line=new ByteArrayOutputStream();
+        StringBuilder reply=new StringBuilder();int total=0,n;
+        byte[] buffer=new byte[4096];boolean done=false;
+        while(!done&&(n=in.read(buffer))!=-1){
+            if(cancelled.getAsBoolean())throw new InterruptedIOException("Cancelled");
+            total+=n;if(total>maxBytes)throw new IOException("Stream too large");
+            for(int i=0;i<n;i++){
+                if(buffer[i]!='\n'){line.write(buffer[i]);continue;}
+                done=decodeLine(line,reply,chunk,maxChars);line.reset();
+                if(done)break;
+            }
+        }
+        if(!done&&line.size()>0)done=decodeLine(line,reply,chunk,maxChars);
+        if(cancelled.getAsBoolean())throw new InterruptedIOException("Cancelled");
+        if(!done)throw new IOException("Incomplete stream");
+        if(reply.toString().trim().isEmpty())throw new IOException("Empty response");
+        return reply.toString();
+    }
+    private static boolean decodeLine(ByteArrayOutputStream line,StringBuilder reply,Chunk chunk,int maxChars)throws Exception{
+        String json=line.toString("UTF-8").trim();if(json.isEmpty())return false;
+        JSONObject event=new JSONObject(json);
+        if(event.has("error"))throw new IOException(event.getString("error"));
+        JSONObject message=event.optJSONObject("message");
+        if(message!=null){
+            String part=message.optString("content","");
+            if(part.length()>maxChars-reply.length())throw new IOException("Response too large");
+            if(!part.isEmpty()){reply.append(part);chunk.accept(reply.toString());}
+        }
+        return event.optBoolean("done");
     }
     boolean isCancelled(){return cancelled;}
     void cancel(){if(cancelled)return;cancelled=true;HttpURLConnection c=connection;if(c!=null)new Thread(c::disconnect,"hatoriel-cancel").start();}
