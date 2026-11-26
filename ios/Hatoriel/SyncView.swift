@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 struct SyncRecord: Codable, Sendable { let content: String; let category: String; let importance: UInt8 }
 struct SyncSnapshot: Codable, Sendable { let version: Int; let records: [SyncRecord]; let profile: CoreProfile; let options: CoreOptions }
-struct SyncSeal: Codable, Sendable { let action = "seal"; let snapshot: SyncSnapshot; let password: String }
-struct SyncPreview: Codable, Sendable { let action = "preview"; let local: SyncSnapshot; let package: String; let password: String }
+struct SyncSeal: Encodable, Sendable { let action = "seal"; let snapshot: SyncSnapshot; let password: String }
+struct SyncPreview: Encodable, Sendable { let action = "preview"; let local: SyncSnapshot; let package: String; let password: String }
 struct SyncPackage: Decodable, Sendable { let package: String }
 struct SyncPlan: Decodable, Sendable { let additions: [SyncRecord]; let duplicates: Int; let conflicts: Int; let profile: CoreProfile; let options: CoreOptions }
 
@@ -23,7 +23,7 @@ struct SyncPlan: Decodable, Sendable { let additions: [SyncRecord]; let duplicat
                 Text("Пакет містить спогади, профіль та налаштування особистості. Не містить історії, ключів серверів або дозволів передачі пам’яті. Пароль передавай окремо.")
                     .font(.footnote)
                 SecureField("Парольна фраза (12+ символів)", text: $password)
-                TextEditor(text: $package).frame(minHeight: 100).autocorrectionDisabled().textInputAutocapitalization(.never)
+                TextEditor(text: $package).disabled(working).frame(minHeight: 100).autocorrectionDisabled().textInputAutocapitalization(.never)
                 Button("Створити зашифрований пакет") { run(export: true) }.disabled(working)
                 Button("Копіювати пакет") { UIPasteboard.general.string = package }.disabled(package.isEmpty || working)
                 Button("Переглянути імпорт") { run(export: false) }.disabled(package.isEmpty || working)
@@ -36,7 +36,18 @@ struct SyncPlan: Decodable, Sendable { let additions: [SyncRecord]; let duplicat
                     LabeledContent("Дублікати", value: String(plan.duplicates))
                     LabeledContent("Конфлікти (локальні збережено)", value: String(plan.conflicts))
                     ForEach(Array(plan.additions.enumerated()), id: \.offset) { row in
-                        Text(row.element.content).font(.footnote)
+                        VStack(alignment: .leading) { Text(row.element.category + " · " + String(row.element.importance) + "/100").font(.caption).foregroundStyle(.secondary); Text(row.element.content).font(.footnote) }
+                    }
+                    DisclosureGroup("Вхідний профіль") {
+                        LabeledContent("Інтереси", value: plan.profile.interests)
+                        LabeledContent("Спілкування", value: plan.profile.communication)
+                        LabeledContent("Цілі", value: plan.profile.goals)
+                    }
+                    DisclosureGroup("Вхідна особистість") {
+                        Text(plan.options.mode)
+                        Text(plan.options.traits.map { String($0) }.joined(separator: " · "))
+                        LabeledContent("Адаптивний стиль", value: plan.options.dynamic_style ? "Так" : "Ні")
+                        LabeledContent("Емоції", value: plan.options.emotion_enabled ? "Так" : "Ні")
                     }
                     Toggle("Замінити профіль", isOn: $profile)
                     Toggle("Замінити особистість", isOn: $personality)
