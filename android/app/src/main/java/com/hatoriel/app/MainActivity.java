@@ -13,6 +13,12 @@ public final class MainActivity extends Activity {
     private final int accent=CrimsonAvatar.RED;
     private CrimsonAvatar avatar;
     private VoiceOutput voice;
+    private static final int ATTACH=73;
+    private final AttachmentDraft attachments=new AttachmentDraft();
+    private LinearLayout attachmentRows;
+    private boolean attaching;
+    private Thread attachmentWorker;
+    private Button attachButton;
     private boolean voiceMode, foreground, externalDictation;
     private CrimsonAvatar welcomeAvatar;
     private Long voiceReplyJob;
@@ -65,7 +71,7 @@ public final class MainActivity extends Activity {
         draftView=label(draftText,16);draftView.setTextColor(0xfff2f2f2);draftView.setPadding(dp(12),dp(10),dp(12),dp(10));draftView.setBackgroundColor(0xff2b2b2e);draftView.setVisibility(active==null?View.GONE:View.VISIBLE);messages.addView(draftView);
         scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
     }
-    private void busy(boolean value){send.setEnabled(ready&&!value);stop.setEnabled(value);clear.setEnabled(!value);memoryButton.setEnabled(!value);hardwareButton.setEnabled(!value&&!importing);retry.setEnabled(ready&&!value&&history.length()>0);endpoint.setEnabled(!value);modelField.setEnabled(!value);bridgeKeyField.setEnabled(!value);importModel.setEnabled(!value&&!importing);}
+    private void busy(boolean value){send.setEnabled(ready&&!value&&!attaching&&attachments.items.isEmpty());if(attachButton!=null)attachButton.setEnabled(!value&&!attaching&&attachments.items.size()<AttachmentDraft.MAX_COUNT);stop.setEnabled(value);clear.setEnabled(!value);memoryButton.setEnabled(!value);hardwareButton.setEnabled(!value&&!importing);retry.setEnabled(ready&&!value&&history.length()>0);endpoint.setEnabled(!value);modelField.setEnabled(!value);bridgeKeyField.setEnabled(!value);importModel.setEnabled(!value&&!importing);}
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
         if(android.os.Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
@@ -110,6 +116,8 @@ public final class MainActivity extends Activity {
         clear.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну історію?").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(GenerationSession.active==null){history=new JSONArray();prefs.edit().remove("history").apply();render();busy(false);}}).show());
         scroll=new ScrollView(this);messages=new LinearLayout(this);messages.setOrientation(LinearLayout.VERTICAL);scroll.addView(messages);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         composer=new LinearLayout(this);composer.setOrientation(LinearLayout.VERTICAL);root.addView(composer);input=new EditText(this);input.setHint("Напиши повідомлення…");input.setMinLines(1);input.setMaxLines(4);composer.addView(input);
+        attachButton=new Button(this);attachButton.setText("＋ Файл");composer.addView(attachButton);attachButton.setOnClickListener(v->pickAttachment());
+        HorizontalScrollView attachmentScroll=new HorizontalScrollView(this);attachmentRows=new LinearLayout(this);attachmentRows.setOrientation(LinearLayout.HORIZONTAL);attachmentScroll.addView(attachmentRows);composer.addView(attachmentScroll);
         LinearLayout buttons=new LinearLayout(this);send=new Button(this);send.setText("Надіслати");stop=new Button(this);stop.setText("Зупинити");buttons.addView(send,new LinearLayout.LayoutParams(0,-2,1));buttons.addView(stop,new LinearLayout.LayoutParams(0,-2,1));composer.addView(buttons);send.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xffa81920));retry=new Button(this);retry.setText("Повторити останній запит");composer.addView(retry);retry.setOnClickListener(v->retryLast());
         CheckBox voiceToggle=new CheckBox(this);voiceToggle.setText("Голосовий діалог");voiceToggle.setChecked(false);composer.addView(voiceToggle);
         voiceState=label("",12);composer.addView(voiceState);
@@ -142,10 +150,29 @@ public final class MainActivity extends Activity {
     }
     private void showSettings(boolean visible){if(visible){voiceReplyJob=null;voice.stop();}settingsScroll.setVisibility(visible?View.VISIBLE:View.GONE);scroll.setVisibility(visible?View.GONE:View.VISIBLE);composer.setVisibility(visible?View.GONE:View.VISIBLE);}
     private void generate(){
+        if(attaching||!attachments.items.isEmpty()){status.setText("Видали вкладення перед надсиланням: аналіз ще недоступний");return;}
         String query=input.getText().toString().trim();if(!ready||GenerationSession.active!=null||query.isEmpty())return;voice.stop();
         if(query.codePointCount(0,query.length())>12000){status.setText("Максимум 12000 символів");return;}
         try{append("user",query);}catch(JSONException e){status.setText(e.toString());return;}
         input.setText("");offerMemory(query);startRequest();
+    }
+    private void pickAttachment(){
+        if(attaching||GenerationSession.active!=null||attachments.items.size()>=AttachmentDraft.MAX_COUNT)return;
+        android.content.Intent i=new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);i.setType("*/*");i.addCategory(android.content.Intent.CATEGORY_OPENABLE);try{startActivityForResult(i,ATTACH);}catch(android.content.ActivityNotFoundException e){status.setText("Файловий менеджер недоступний");}
+    }
+    private void renderAttachments(){
+        attachmentRows.removeAllViews();
+        if(!attachments.items.isEmpty()){
+            for(AttachmentDraft.Item item:attachments.items){LinearLayout tile=new LinearLayout(this);tile.setOrientation(LinearLayout.VERTICAL);tile.setPadding(dp(4),dp(4),dp(4),dp(4));attachmentRows.addView(tile,new LinearLayout.LayoutParams(dp(110),-2));
+                if(item.preview!=null){ImageView image=new ImageView(this);image.setImageBitmap(item.preview);image.setScaleType(ImageView.ScaleType.FIT_CENTER);tile.addView(image,new LinearLayout.LayoutParams(-1,dp(56)));}
+                TextView name=label(item.name,11);name.setMaxLines(1);name.setEllipsize(android.text.TextUtils.TruncateAt.END);tile.addView(name);tile.addView(label((item.bytes.length/1024)+" KiB",10));Button remove=new Button(this);remove.setText("Видалити");remove.setTextSize(10);tile.addView(remove);remove.setOnClickListener(v->{attachments.items.remove(item);renderAttachments();});}
+            Button clearFiles=new Button(this);clearFiles.setText("Очистити");attachmentRows.addView(clearFiles);clearFiles.setOnClickListener(v->{attachments.items.clear();renderAttachments();});
+        }
+        if(!attachments.items.isEmpty())status.setText("Вкладення локальні. Видали їх, щоб надіслати текст.");busy(GenerationSession.active!=null);
+    }
+    private void importAttachment(android.net.Uri uri){
+        if(attaching||GenerationSession.active!=null||attachments.items.size()>=AttachmentDraft.MAX_COUNT)return;attaching=true;busy(false);status.setText("Читання файлу…");final int limit=attachments.remaining();final android.content.ContentResolver resolver=getApplicationContext().getContentResolver();
+        attachmentWorker=new Thread(()->{AttachmentDraft.Item item=null;String error=null;try{item=AttachmentDraft.read(resolver,uri,limit);}catch(Exception e){error=e.getMessage();}final AttachmentDraft.Item result=item;final String failure=error;runOnUiThread(()->{if(destroyed)return;attaching=false;if(result!=null&&attachments.add(result)){renderAttachments();}else{status.setText(failure==null?"Дублікат або перевищено ліміт":failure);busy(GenerationSession.active!=null);}});},"hatoriel-attachment");attachmentWorker.start();
     }
     private void retryLast(){
         if(!ready||GenerationSession.active!=null||history.length()==0)return;
@@ -329,6 +356,6 @@ public final class MainActivity extends Activity {
         refresh.run();new AlertDialog.Builder(this).setTitle("Нагадування Hatoriel").setView(sv).setPositiveButton("Закрити",null).show();
     }
     private void refreshLocalModel(){try{java.io.File file=ModelImport.selected(this);localModelStatus.setText(file.isFile()?String.format(java.util.Locale.ROOT,"GGUF: %.2f GiB · імпортовано, запуск ще недоступний",file.length()/1073741824.0):"GGUF не імпортовано");}catch(java.io.IOException e){localModelStatus.setText(e.getMessage());}}
-    @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request==DICTATION){externalDictation=false;updateVoiceState();if(result==RESULT_OK&&data!=null&&GenerationSession.active==null){java.util.ArrayList<String> values=data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);if(values!=null&&!values.isEmpty()&&values.get(0)!=null){String old=input.getText().toString(),next=old.isEmpty()?values.get(0):old+" "+values.get(0);int n=next.codePointCount(0,next.length());if(n>12000)next=next.substring(0,next.offsetByCodePoints(0,12000));input.setText(next);input.setSelection(next.length());status.setText("Чернетка готова");}}return;}if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);hardwareButton.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);hardwareButton.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
-    @Override protected void onDestroy(){destroyed=true;if(voice!=null)voice.close();if(importWorker!=null)importWorker.interrupt();sessionHandler.removeCallbacks(sessionWatch);if(isFinishing()&&!GenerationSession.background)GenerationSession.cancel();super.onDestroy();}
+    @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request==ATTACH){if(result==RESULT_OK&&data!=null&&data.getData()!=null)importAttachment(data.getData());return;}if(request==DICTATION){externalDictation=false;updateVoiceState();if(result==RESULT_OK&&data!=null&&GenerationSession.active==null){java.util.ArrayList<String> values=data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);if(values!=null&&!values.isEmpty()&&values.get(0)!=null){String old=input.getText().toString(),next=old.isEmpty()?values.get(0):old+" "+values.get(0);int n=next.codePointCount(0,next.length());if(n>12000)next=next.substring(0,next.offsetByCodePoints(0,12000));input.setText(next);input.setSelection(next.length());status.setText("Чернетка готова");}}return;}if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);hardwareButton.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);hardwareButton.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
+    @Override protected void onDestroy(){destroyed=true;if(attachmentWorker!=null)attachmentWorker.interrupt();attachments.items.clear();if(voice!=null)voice.close();if(importWorker!=null)importWorker.interrupt();sessionHandler.removeCallbacks(sessionWatch);if(isFinishing()&&!GenerationSession.background)GenerationSession.cancel();super.onDestroy();}
 }

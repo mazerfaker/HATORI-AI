@@ -1,10 +1,10 @@
 [package]
 name = "hatori_ai"
-version = "0.6.4"
+version = "0.6.5"
 edition = "2021"
 [features]
 default = ["desktop"]
-desktop = ["dep:eframe", "dep:rusqlite", "dep:tray-icon", "dep:tiny_http"]
+desktop = ["dep:eframe", "dep:rusqlite", "dep:tray-icon", "dep:tiny_http", "dep:image", "dep:rfd", "dep:arboard"]
 
 [[bin]]
 name = "hatori_ai"
@@ -19,6 +19,7 @@ argon2 = "0.5"
 base64 = "0.22"
 zeroize = "1"
 eframe = { version = "0.29", optional = true }
+image = { version = "0.25", default-features = false, features = ["png","jpeg"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
@@ -26,3 +27,5 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 tray-icon = { version = "0.19", optional = true }
+rfd = { version = "0.15", optional = true, default-features = false }
+arboard = { version = "3.4", optional = true, features = ["image-data"] }

@@ -74,6 +74,7 @@ struct CrimsonReticle: View {
 struct FoundationView: View {
     @StateObject private var chat = ChatStore()
     @StateObject private var voice = VoiceController()
+    @StateObject private var attachments = AttachmentDraft()
     @AppStorage("voice.language") private var voiceLanguage = "uk-UA"
     @State private var voiceMode = false
     @State private var voiceReplyPending = false
@@ -211,19 +212,20 @@ struct FoundationView: View {
                     }.disabled(voice.requesting || chat.busy)
                 }
                 if !voice.status.isEmpty { Text(voice.status).font(.caption2).foregroundStyle(.secondary) }
+                AttachmentPanel(draft: attachments, enabled: !chat.busy && !chat.importing && !voice.requesting)
                 HStack(alignment: .bottom, spacing: 8) {
                     TextField("Напиши повідомлення…", text: $input, axis: .vertical)
                         .lineLimit(1...5).focused($focused).padding(12)
                         .background(surface, in: RoundedRectangle(cornerRadius: 12))
                     Button {
                         if chat.busy { voiceReplyPending = false; voice.shutdown(); chat.cancel() }
-                        else if !voice.requesting && chat.send(input) { voiceReplyPending = voiceMode; voice.shutdown(); CrimsonFeedback.send(enabled: haptics); input = ""; focused = false; followLatest = true }
+                        else if attachments.empty && !voice.requesting && chat.send(input) { voiceReplyPending = voiceMode; voice.shutdown(); CrimsonFeedback.send(enabled: haptics); input = ""; focused = false; followLatest = true }
                     } label: {
                         Image(systemName: chat.busy ? "stop.fill" : "arrow.up")
                             .font(.headline).frame(width: 46, height: 46)
                             .background(Color(red: 0.63, green: 0.08, blue: 0.1), in: RoundedRectangle(cornerRadius: 12))
                     }.accessibilityLabel(chat.busy ? "Зупинити" : "Надіслати")
-                     .disabled(chat.importing || (!chat.busy && (voice.requesting || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)))
+                     .disabled(chat.importing || (!chat.busy && (!attachments.empty || voice.requesting || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)))
                 }
             }.padding(12).frame(maxWidth: 780).frame(maxWidth: .infinity)
         }.background(graphite.ignoresSafeArea()).foregroundStyle(.white).tint(crimson)
@@ -377,7 +379,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.6.4")
+                    Text("Crimson Core Minimal · 0.6.5")
                     Text("Rust Core " + coreVersion)
                 }
             }
