@@ -13,6 +13,9 @@ public final class MainActivity extends Activity {
     private final int accent=CrimsonAvatar.RED;
     private CrimsonAvatar avatar;
     private VoiceOutput voice;
+    private boolean voiceMode, foreground;
+    private Long voiceReplyJob;
+    private TextView voiceState;
     private static final int DICTATION=72;
     private ScrollView settingsScroll;
     private LinearLayout composer, bottomNav;
@@ -106,18 +109,22 @@ public final class MainActivity extends Activity {
         scroll=new ScrollView(this);messages=new LinearLayout(this);messages.setOrientation(LinearLayout.VERTICAL);scroll.addView(messages);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         composer=new LinearLayout(this);composer.setOrientation(LinearLayout.VERTICAL);root.addView(composer);input=new EditText(this);input.setHint("Напиши повідомлення…");input.setMinLines(1);input.setMaxLines(4);composer.addView(input);
         LinearLayout buttons=new LinearLayout(this);send=new Button(this);send.setText("Надіслати");stop=new Button(this);stop.setText("Зупинити");buttons.addView(send,new LinearLayout.LayoutParams(0,-2,1));buttons.addView(stop,new LinearLayout.LayoutParams(0,-2,1));composer.addView(buttons);send.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xffa81920));retry=new Button(this);retry.setText("Повторити останній запит");composer.addView(retry);retry.setOnClickListener(v->retryLast());
+        CheckBox voiceToggle=new CheckBox(this);voiceToggle.setText("Голосовий діалог");voiceToggle.setChecked(false);composer.addView(voiceToggle);
+        voiceState=label("",12);composer.addView(voiceState);
+        voiceToggle.setOnCheckedChangeListener((b,value)->{voiceMode=value;if(!value){voiceReplyJob=null;voice.stop();}updateVoiceState();});
         LinearLayout voiceRow=new LinearLayout(this);
         Button dictate=new Button(this);dictate.setText("Диктувати");dictate.setOnClickListener(v->dictate());
         Button speak=new Button(this);speak.setText("Озвучити");speak.setOnClickListener(v->{if(GenerationSession.active!=null)return;for(int i=history.length()-1;i>=0;i--){JSONObject m=history.optJSONObject(i);if(m!=null&&"assistant".equals(m.optString("role"))){status.setText(voice.speak(m.optString("content"),voiceLanguage()));return;}}status.setText("Немає відповіді");});
-        Button silence=new Button(this);silence.setText("Стоп звук");silence.setOnClickListener(v->voice.stop());
+        Button silence=new Button(this);silence.setText("Стоп звук");silence.setOnClickListener(v->{voiceReplyJob=null;voice.stop();updateVoiceState();});
         for(Button b:new Button[]{dictate,speak,silence}){b.setTextSize(11);b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(0,0,0,0);voiceRow.addView(b,new LinearLayout.LayoutParams(0,dp(48),1));}composer.addView(voiceRow);
         LinearLayout nav=new LinearLayout(this);bottomNav=nav;nav.setOrientation(LinearLayout.HORIZONTAL);nav.setBackgroundColor(0xff242426);root.addView(nav);
         Button chat=new Button(this);chat.setText("Чат");chat.setOnClickListener(v->showSettings(false));
         for(Button btn:new Button[]{chat,memoryButton,hardwareButton,reminders,config}){btn.setTextSize(11);btn.setAllCaps(false);btn.setMinWidth(0);btn.setMinimumWidth(0);btn.setPadding(0,0,0,0);nav.addView(btn,new LinearLayout.LayoutParams(0,dp(52),1));}
         try{status.setText("Rust Core "+NativeCore.version()+" · "+base);ready=true;}catch(LinkageError e){status.setText("Rust Core недоступне: "+e.getMessage());}
-        send.setOnClickListener(v->generate());stop.setOnClickListener(v->{GenerationSession.cancel();syncSession();});
+        send.setOnClickListener(v->generate());stop.setOnClickListener(v->{voiceReplyJob=null;voice.stop();GenerationSession.cancel();syncSession();});
         setContentView(root);root.requestApplyInsets();render();busy(false);syncSession();MobileReminders.channel(this);
     }
+    private void updateVoiceState(){if(voiceState==null||voice==null)return;voiceState.setVisibility(voiceMode?View.VISIBLE:View.GONE);if(voiceMode)voiceState.setText(GenerationSession.active!=null?"Обробка репліки":voice.speaking()?"Озвучування":"Готова до репліки · диктуй, перевір текст, надішли");}
     private String voiceLanguage(){return prefs.getBoolean("voice_english",false)?"en-US":"uk-UA";}
     private void dictate(){
         if(GenerationSession.active!=null)return;
@@ -125,7 +132,7 @@ public final class MainActivity extends Activity {
             if(GenerationSession.active!=null)return;voice.stop();android.content.Intent i=new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE,voiceLanguage());i.putExtra(android.speech.RecognizerIntent.EXTRA_PREFER_OFFLINE,true);i.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS,1);try{startActivityForResult(i,DICTATION);}catch(android.content.ActivityNotFoundException e){status.setText("Сервіс диктування недоступний");}
         }).show();
     }
-    private void showSettings(boolean visible){settingsScroll.setVisibility(visible?View.VISIBLE:View.GONE);scroll.setVisibility(visible?View.GONE:View.VISIBLE);composer.setVisibility(visible?View.GONE:View.VISIBLE);}
+    private void showSettings(boolean visible){if(visible){voiceReplyJob=null;voice.stop();}settingsScroll.setVisibility(visible?View.VISIBLE:View.GONE);scroll.setVisibility(visible?View.GONE:View.VISIBLE);composer.setVisibility(visible?View.GONE:View.VISIBLE);}
     private void generate(){
         String query=input.getText().toString().trim();if(!ready||GenerationSession.active!=null||query.isEmpty())return;voice.stop();
         if(query.codePointCount(0,query.length())>12000){status.setText("Максимум 12000 символів");return;}
@@ -155,13 +162,15 @@ public final class MainActivity extends Activity {
         if(power!=null&&power.isPowerSaveMode())keep=false;
         if(!MobileReminders.permitted(this))keep=false;
         try{
+            voice.stop();voiceReplyJob=null;
             GenerationSession.start(this,data,server,selectedModel,server.equals(bridgeEndpoint)?bridgeKey:"",keep,replaceExpected);
+            if(voiceMode&&foreground)voiceReplyJob=GenerationSession.job;
             if(keep){try{startForegroundService(new android.content.Intent(this,GenerationService.class).putExtra("job",GenerationSession.job));}catch(RuntimeException e){GenerationSession.background=false;GenerationSession.status="Фоновий сервіс недоступний; генерація лише у відкритому чаті";GenerationSession.revision++;}}
             syncSession();
         }catch(RuntimeException e){status.setText("Помилка: "+e.getMessage());}
     }
     private void syncSession(){
-        if(sessionRevision==GenerationSession.revision)return;
+        updateVoiceState();if(sessionRevision==GenerationSession.revision)return;
         sessionRevision=GenerationSession.revision;
         ChatTransport previous=active;active=GenerationSession.active;
         draftText=GenerationSession.partial;avatar.setBusy(active!=null);
@@ -171,6 +180,7 @@ public final class MainActivity extends Activity {
             if(previous!=null&&active==null&&"Готово".equals(GenerationSession.status))send.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
         }else if(draftView!=null){draftView.setText(draftText);scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));}
         if(!GenerationSession.status.isEmpty())status.setText(GenerationSession.status);
+        if(active==null&&voiceReplyJob!=null){boolean speak=voiceMode&&foreground&&voiceReplyJob.longValue()==GenerationSession.job&&"Готово".equals(GenerationSession.status)&&settingsScroll.getVisibility()!=View.VISIBLE;voiceReplyJob=null;if(speak){JSONObject last=history.optJSONObject(history.length()-1);if(last!=null&&"assistant".equals(last.optString("role")))status.setText(voice.speak(last.optString("content"),voiceLanguage()));}}updateVoiceState();
     }
     private void offerMemory(String query){
         if(!memory.suggestions())return;
@@ -286,8 +296,8 @@ public final class MainActivity extends Activity {
         remove.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну модель?").setMessage("Видаляється лише копія в Hatoriel. Початковий файл не змінюється.").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(importing||active!=null)return;try{if(!ModelImport.remove(this))throw new java.io.IOException("Не вдалося видалити");refreshLocalModel();refresh.run();}catch(Exception e){status.setText(e.getMessage());}}).show());
         refresh.run();new AlertDialog.Builder(this).setTitle("Hardware & Model Manager").setView(sv).setPositiveButton("Закрити",null).show();
     }
-    @Override protected void onResume(){super.onResume();syncSession();sessionHandler.removeCallbacks(sessionWatch);sessionHandler.post(sessionWatch);MobileReminders.channel(this);MobileReminders.schedule(this);}
-    @Override protected void onPause(){sessionHandler.removeCallbacks(sessionWatch);if(voice!=null)voice.stop();super.onPause();}
+    @Override protected void onResume(){super.onResume();foreground=true;syncSession();sessionHandler.removeCallbacks(sessionWatch);sessionHandler.post(sessionWatch);MobileReminders.channel(this);MobileReminders.schedule(this);}
+    @Override protected void onPause(){foreground=false;voiceReplyJob=null;sessionHandler.removeCallbacks(sessionWatch);if(voice!=null)voice.stop();super.onPause();}
     @Override protected void onStop(){if(!GenerationSession.background&&!isChangingConfigurations())GenerationSession.cancel();super.onStop();}
     @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){super.onRequestPermissionsResult(request,permissions,results);if(request==45){MobileReminders.schedule(this);if(!MobileReminders.permitted(this))Toast.makeText(this,"Сповіщення не дозволено",Toast.LENGTH_LONG).show();}}
     private void showReminders(){

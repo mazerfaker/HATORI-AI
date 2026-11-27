@@ -15,7 +15,7 @@ final class VoiceOutput {
         java.util.Set<Voice> voices=tts.getVoices();
         Voice selected=null;
         if(voices!=null)for(Voice v:voices){
-            if(!v.isNetworkConnectionRequired()&&v.getLocale().getLanguage().equals(locale.getLanguage())&&!v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)){selected=v;break;}
+            if(!v.isNetworkConnectionRequired()&&v.getLocale().getLanguage().equals(locale.getLanguage())&&(v.getFeatures()==null||!v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED))){selected=v;break;}
         }
         if(selected==null)return "Встанови локальний голос потрібної мови в Android";
         if(tts.setVoice(selected)!=TextToSpeech.SUCCESS)return "Не вдалося вибрати голос";
@@ -24,6 +24,7 @@ final class VoiceOutput {
         if(end==0)return "Немає тексту";
         return tts.speak(text.substring(0,end),TextToSpeech.QUEUE_FLUSH,null,"hatoriel-"+System.nanoTime())==TextToSpeech.SUCCESS?"Озвучування запущено":"Помилка озвучування";
     }
+    boolean speaking(){return !closed&&tts!=null&&tts.isSpeaking();}
     void stop(){if(tts!=null)tts.stop();}
     void close(){closed=true;ready=false;if(tts!=null){tts.stop();tts.shutdown();tts=null;}}
 }

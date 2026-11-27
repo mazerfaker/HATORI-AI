@@ -59,6 +59,8 @@ struct FoundationView: View {
     @StateObject private var chat = ChatStore()
     @StateObject private var voice = VoiceController()
     @AppStorage("voice.language") private var voiceLanguage = "uk-UA"
+    @State private var voiceMode = false
+    @State private var voiceReplyPending = false
     @StateObject private var reminders = ReminderStore()
     @Environment(\.scenePhase) private var scenePhase
     @State private var input = ""
@@ -97,7 +99,7 @@ struct FoundationView: View {
                 Spacer()
                 Button {
                     focused = false
-                    voice.shutdown(); endpoint = chat.endpoint; model = chat.model; desktop = chat.desktopMode; sessionKey = ""; personality = chat.options; settingsError = ""; settings = true
+                    voiceReplyPending = false; voice.shutdown(); endpoint = chat.endpoint; model = chat.model; desktop = chat.desktopMode; sessionKey = ""; personality = chat.options; settingsError = ""; settings = true
                 } label: { Image(systemName: "gearshape").font(.title3).frame(width: 44, height: 44) }
                 .accessibilityLabel("Налаштування").disabled(chat.busy)
             }.padding(.horizontal, 16).padding(.vertical, 8)
@@ -159,15 +161,22 @@ struct FoundationView: View {
                             .accessibilityLabel("Повторити останній запит")
                     }
                 }
+                Toggle("Голосовий діалог", isOn: $voiceMode).font(.caption)
+                    .onChange(of: voiceMode) { enabled in if !enabled { voiceReplyPending = false; voice.shutdown() } }
+                if voiceMode {
+                    Text(voice.requesting ? "Слухаю / готую мікрофон" : chat.busy ? "Обробка репліки" : voice.speaking ? "Озвучую відповідь" : "Готова до наступної репліки")
+                        .font(.caption.bold()).foregroundStyle(crimson)
+                    Text("Мікрофон вмикається лише вручну. Перевір текст перед надсиланням.").font(.caption2)
+                }
                 HStack {
-                    Button(voice.listening ? "Завершити запис" : "Диктувати") {
+                    Button(voice.requesting ? "Завершити запис" : "Диктувати") {
                         if voice.requesting { voice.stop() } else { focused = false; voice.stopSpeech(); voice.start(language: voiceLanguage) }
                     }.disabled(chat.busy || chat.importing)
                     Spacer()
                     Button("Озвучити") {
                         if let last = chat.history.last(where: { $0.role == "assistant" }) { voice.speak(last.content, language: voiceLanguage) }
                     }.disabled(chat.busy || voice.requesting || !chat.history.contains(where: { $0.role == "assistant" }))
-                    Button("Стоп звук") { voice.stopSpeech() }.disabled(!voice.speaking)
+                    Button("Стоп звук") { voiceReplyPending = false; voice.stopSpeech() }.disabled(!voice.speaking && !voiceReplyPending)
                 }.font(.caption)
                 if !voice.transcript.isEmpty {
                     Text(voice.transcript).font(.caption).lineLimit(4)
@@ -176,7 +185,7 @@ struct FoundationView: View {
                         let joined = input.isEmpty ? voice.transcript : input + " " + voice.transcript
                         input = String(joined.unicodeScalars.prefix(12000))
                         voice.clearTranscript()
-                    }.disabled(voice.listening || chat.busy)
+                    }.disabled(voice.requesting || chat.busy)
                 }
                 if !voice.status.isEmpty { Text(voice.status).font(.caption2).foregroundStyle(.secondary) }
                 HStack(alignment: .bottom, spacing: 8) {
@@ -184,24 +193,40 @@ struct FoundationView: View {
                         .lineLimit(1...5).focused($focused).padding(12)
                         .background(surface, in: RoundedRectangle(cornerRadius: 12))
                     Button {
-                        if chat.busy { chat.cancel() }
-                        else if chat.send(input) { voice.shutdown(); CrimsonFeedback.send(enabled: haptics); input = ""; focused = false; followLatest = true }
+                        if chat.busy { voiceReplyPending = false; voice.shutdown(); chat.cancel() }
+                        else if !voice.requesting && chat.send(input) { voiceReplyPending = voiceMode; voice.shutdown(); CrimsonFeedback.send(enabled: haptics); input = ""; focused = false; followLatest = true }
                     } label: {
                         Image(systemName: chat.busy ? "stop.fill" : "arrow.up")
                             .font(.headline).frame(width: 46, height: 46)
                             .background(Color(red: 0.63, green: 0.08, blue: 0.1), in: RoundedRectangle(cornerRadius: 12))
                     }.accessibilityLabel(chat.busy ? "Зупинити" : "Надіслати")
-                     .disabled(chat.importing || (!chat.busy && input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                     .disabled(chat.importing || (!chat.busy && (voice.requesting || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)))
                 }
             }.padding(12).frame(maxWidth: 780).frame(maxWidth: .infinity)
         }.background(graphite.ignoresSafeArea()).foregroundStyle(.white).tint(crimson)
         .sheet(isPresented: $settings, onDismiss: { sessionKey = "" }) { settingsView }
-        .onChange(of: chat.feedbackRevision) { _ in if scenePhase == .active { CrimsonFeedback.finish(chat.feedbackState, enabled: haptics) } }
+        .onChange(of: chat.feedbackRevision) { _ in
+            let shouldSpeak = voiceReplyPending
+            voiceReplyPending = false
+            if scenePhase == .active {
+                CrimsonFeedback.finish(chat.feedbackState, enabled: haptics)
+                if shouldSpeak && voiceMode && !settings && chat.feedbackState == .completed,
+                   let reply = chat.history.last, reply.role == "assistant", !voice.requesting {
+                    voice.speak(reply.content, language: voiceLanguage)
+                }
+            }
+        }
         .alert("Повторити останній запит?", isPresented: $confirmRetry) {
             Button("Скасувати", role: .cancel) {}
-            Button("Повторити") { chat.retry() }
+            Button("Повторити") { voiceReplyPending = false; voice.shutdown(); chat.retry(); if chat.busy { voiceReplyPending = voiceMode } }
         } message: { Text("Попередня відповідь збережеться, якщо нова генерація не завершиться.") }
-        .onChange(of: scenePhase) { phase in if phase != .active { voice.shutdown() }; if phase == .background { chat.cancel() }; if phase == .active { chat.reloadMemory(); Task { await reminders.refresh() } } }
+        .onChange(of: scenePhase) { phase in
+            if phase != .active { voiceReplyPending = false }
+            if phase == .background { voice.shutdown(); chat.cancel() }
+            // Do not cancel permission requests merely because an OS permission alert makes the scene inactive.
+            if phase == .inactive && (voice.listening || voice.speaking) { voice.shutdown() }
+            if phase == .active { chat.reloadMemory(); Task { await reminders.refresh() } }
+        }
         .task { coreVersion = (try? NativeCore.version()) ?? "Недоступне"; await reminders.refresh() }
     }
 
@@ -329,7 +354,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.6.1")
+                    Text("Crimson Core Minimal · 0.6.2")
                     Text("Rust Core " + coreVersion)
                 }
             }

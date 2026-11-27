@@ -4,6 +4,7 @@ import Speech
 
 @MainActor final class VoiceController: NSObject, ObservableObject {
     @Published private(set) var listening = false
+    @Published private(set) var requesting = false
     @Published private(set) var speaking = false
     @Published private(set) var transcript = ""
     @Published private(set) var status = ""
@@ -21,7 +22,7 @@ import Speech
     func start(language: String) {
         guard ticket == nil, !speaking else { return }
         let id = UUID()
-        ticket = id; transcript = ""; status = "Перевірка дозволів…"
+        ticket = id; requesting = true; transcript = ""; status = "Перевірка дозволів…"
         Task {
             let speech = await withCheckedContinuation { (c: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus,Never>) in
                 SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) }
@@ -71,7 +72,7 @@ import Speech
     }
     func stop(_ message: String = "Чернетка готова.") {
         guard ticket != nil else { return }
-        ticket = nil; timer?.cancel(); timer = nil
+        ticket = nil; requesting = false; timer?.cancel(); timer = nil
         engine.stop()
         if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
         request?.endAudio(); recognition?.cancel()
@@ -107,7 +108,6 @@ import Speech
         speechMonitor?.cancel(); speechMonitor = nil
         if speaking { synthesizer.stopSpeaking(at: .immediate); speaking = false; status = "Озвучування завершено"; try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
     }
-    var requesting: Bool { ticket != nil }
     func clearTranscript() { transcript = "" }
     func shutdown() { stop(); stopSpeech() }
 }

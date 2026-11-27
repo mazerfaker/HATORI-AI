@@ -3,6 +3,10 @@ pub struct Voice {
  #[cfg(windows)] child:Option<std::process::Child>,
 }
 impl Voice {
+ pub fn active(&self)->bool{
+  #[cfg(windows)] {self.child.is_some()}
+  #[cfg(not(windows))] {false}
+ }
  pub fn stop(&mut self){
   #[cfg(windows)] if let Some(mut child)=self.child.take(){let _=child.kill();let _=child.wait();}
  }
