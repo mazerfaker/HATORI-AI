@@ -1,17 +1,22 @@
 #[derive(Default)]
 pub struct Voice {
+ neural:crate::neural_voice::Neural,
  #[cfg(windows)] child:Option<std::process::Child>,
 }
 impl Voice {
  pub fn active(&self)->bool{
+  if self.neural.active(){return true;}
   #[cfg(windows)] {self.child.is_some()}
   #[cfg(not(windows))] {false}
  }
+ pub fn synthesizing(&self)->bool{self.neural.active()&&!self.neural.playing()}
  pub fn stop(&mut self){
+  self.neural.stop();
   #[cfg(windows)] if let Some(mut child)=self.child.take(){let _=child.kill();let _=child.wait();}
  }
- pub fn speak(&mut self,text:&str,english:bool)->Result<(),String>{
+ pub fn speak(&mut self,text:&str,english:bool,settings:&crate::neural_voice::Settings)->Result<(),String>{
   self.stop();
+  if settings.enabled{return self.neural.start(text,settings);}
   #[cfg(windows)] {
    use std::{io::Write,process::{Command,Stdio},os::windows::process::CommandExt};
    let text:String=text.chars().take(4000).collect();
@@ -28,6 +33,7 @@ impl Voice {
   #[cfg(not(windows))] {let _=(text,english);Err("Windows speech only".into())}
  }
  pub fn poll(&mut self)->Option<Result<(),String>>{
+  if self.neural.active(){return self.neural.poll();}
   #[cfg(windows)] {
    if let Some(child)=self.child.as_mut(){match child.try_wait(){Ok(Some(s))=>{self.child=None;return Some(if s.success(){Ok(())}else{Err("Speech unavailable; check installed Windows voices".into())});},Err(e)=>{self.stop();return Some(Err(e.to_string()));},Ok(None)=>{}}}
   }
