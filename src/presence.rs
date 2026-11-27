@@ -31,7 +31,7 @@ impl Presence {
     pub fn available(&self)->bool { #[cfg(windows)] {self.tray.is_some()} #[cfg(not(windows))] {false} }
     pub fn hide(&mut self, ctx:&egui::Context) { if self.available() { self.hidden=true; ctx.send_viewport_cmd(Cmd::Minimized(true)); } }
     fn restore(&mut self,ctx:&egui::Context) { self.hidden=false; ctx.send_viewport_cmd(Cmd::Visible(true)); ctx.send_viewport_cmd(Cmd::Minimized(false)); ctx.send_viewport_cmd(Cmd::Focus); }
-    pub fn update(&mut self,ctx:&egui::Context,cfg:&mut Config,busy:bool)->bool {
+    pub fn update(&mut self,ctx:&egui::Context,cfg:&mut Config,state:super::crimson::State,mood:u8)->bool {
         let mut changed=false;
         #[cfg(windows)] {
             use tray_icon::{TrayIconEvent, menu::MenuEvent};
@@ -52,10 +52,10 @@ impl Presence {
                     let (r,response)=ui.allocate_exact_size(egui::vec2(180.,160.),egui::Sense::click_and_drag());
                     if response.drag_started(){ctx.send_viewport_cmd(Cmd::StartDrag);}
                     let p=ui.painter();let c=r.center();let t=ctx.input(|i|i.time) as f32;
-                    super::crimson::reticle(p,c,34.,t,busy);
-                    p.text(c+egui::vec2(0.,65.),egui::Align2::CENTER_CENTER,if busy{"THINKING"}else{"Hatoriel"},egui::FontId::monospace(12.),super::crimson::RED);
+                    super::crimson::reticle(p,c,34.,t,state,cfg.avatar_motion,mood);
+                    p.text(c+egui::vec2(0.,65.),egui::Align2::CENTER_CENTER,state.label(),egui::FontId::monospace(12.),super::crimson::RED);
                     ui.horizontal(|ui|{if ui.small_button("Open").clicked(){ctx.send_viewport_cmd_to(egui::ViewportId::ROOT,Cmd::Visible(true));ctx.send_viewport_cmd_to(egui::ViewportId::ROOT,Cmd::Minimized(false));ctx.send_viewport_cmd_to(egui::ViewportId::ROOT,Cmd::Focus);self.hidden=false;} if ui.small_button("Hide").clicked(){cfg.avatar=false;changed=true;}});
-                });ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                });if cfg.avatar_motion{ctx.request_repaint_after(std::time::Duration::from_millis(if state.animated(){33}else{100}));}
             });
         }
         changed

@@ -15,7 +15,9 @@ struct CrimsonReticle: View {
         TimelineView(.animation(minimumInterval: state.animated ? 1.0/30.0 : 1.0/15.0, paused: !motion || reduceMotion || scenePhase != .active)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
             let still = reduceMotion || !motion || scenePhase != .active
-            let pulse = still ? 1.0 : 1.0 + sin(time * (state == .responding ? 5 : state == .thinking ? 3 : 1.8)) * (state == .responding ? 0.075 : 0.035)
+            let speed: Double = state == .speaking ? 6 : state == .listening ? 3 : state == .responding ? 5 : state == .thinking ? 3 : 1.8
+            let amplitude: Double = state == .speaking ? 0.065 : state == .listening ? 0.05 : 0.035
+            let pulse = still ? 1.0 : 1.0 + sin(time * speed) * amplitude
             Canvas { context, size in
                 let center = CGPoint(x: size.width/2, y: size.height/2)
                 let r = min(size.width, size.height) * 0.27 * CGFloat(pulse)
@@ -29,12 +31,26 @@ struct CrimsonReticle: View {
                     line.addLine(to: CGPoint(x: center.x+cos(a)*r*1.42, y: center.y+sin(a)*r*1.42))
                     context.stroke(line, with: .color(crimson), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 }
-                if state == .thinking {
+                if state == .thinking || state == .preparing {
                     for i in 0..<3 {
                         let start = still ? Double(i)*120 : time*85 + Double(i)*120
                         var arc = Path()
                         arc.addArc(center: center, radius: r*1.65, startAngle: .degrees(start), endAngle: .degrees(start+60), clockwise: false)
                         context.stroke(arc, with: .color(crimson.opacity(0.75)), lineWidth: 1.5)
+                    }
+                }
+                if state == .listening {
+                    let outer = r * 1.54
+                    context.stroke(Path(ellipseIn: CGRect(x: center.x-outer, y: center.y-outer, width: 2*outer, height: 2*outer)), with: .color(crimson.opacity(0.45)), lineWidth: 1)
+                    context.fill(Path(ellipseIn: CGRect(x: center.x-2, y: center.y-r*1.72-2, width: 4, height: 4)), with: .color(crimson))
+                }
+                if state == .speaking {
+                    for i in -3...3 {
+                        let x = center.x + CGFloat(i)*r*0.28
+                        let y = center.y + r*1.55
+                        let h = r * (0.12 + 0.17 * CGFloat(abs(sin((still ? 0 : time*6)+Double(i)*0.9))))
+                        var bar = Path(); bar.move(to: CGPoint(x: x, y: y-h)); bar.addLine(to: CGPoint(x: x, y: y+h))
+                        context.stroke(bar, with: .color(crimson.opacity(0.8)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
                     }
                 }
                 if state == .responding {
@@ -83,6 +99,13 @@ struct FoundationView: View {
     @State private var chooseGGUF = false
     @State private var confirmImport = false
     @State private var confirmRemove = false
+    private var avatarState: CrimsonState {
+        if voice.listening { return .listening }
+        if voice.requesting { return .preparing }
+        if chat.busy { return chat.feedbackState }
+        if voice.speaking { return .speaking }
+        return chat.feedbackState
+    }
     private let traitLabels = ["Аналітичність","Емпатія","Допитливість","Гумор","Ініціативність","Емоційність","Сарказм"]
     private let modeLabels = ["Companion":"Компаньйон","Assistant":"Асистент","Developer":"Розробник","Researcher":"Дослідник"]
     private let moodLabels = ["Calm":"Спокій","Joy":"Радість","Concern":"Турбота","Surprise":"Здивування","Curiosity":"Допитливість"]
@@ -91,7 +114,7 @@ struct FoundationView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                CrimsonReticle(state: chat.feedbackState, motion: motion).frame(width: 44, height: 44)
+                CrimsonReticle(state: avatarState, motion: motion).frame(width: 44, height: 44)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("HATORIEL").font(.headline).tracking(2).lineLimit(1).minimumScaleFactor(0.7)
                     Text(chat.localMode ? "CRIMSON CORE · LOCAL" : chat.desktopMode ? "CRIMSON CORE · PC" : "CRIMSON CORE").font(.caption2).foregroundStyle(crimson).lineLimit(1).minimumScaleFactor(0.7)
@@ -108,7 +131,7 @@ struct FoundationView: View {
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         if chat.history.isEmpty {
-                            CrimsonReticle(state: chat.feedbackState, motion: motion).frame(width: 148, height: 148).padding(.top, 24)
+                            CrimsonReticle(state: avatarState, motion: motion).frame(width: 148, height: 148).padding(.top, 24)
                             Text("Готова до діалогу").font(.title2.bold())
                             Text("Чим можу допомогти?").foregroundStyle(.secondary)
                         }
@@ -154,7 +177,7 @@ struct FoundationView: View {
             }
             VStack(spacing: 8) {
                 HStack {
-                    VStack(alignment: .leading, spacing: 3) { Text(chat.feedbackState.label).font(.caption.bold()).foregroundStyle(crimson); Text(chat.status).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
+                    VStack(alignment: .leading, spacing: 3) { Text(avatarState.label).font(.caption.bold()).foregroundStyle(crimson); Text(chat.status).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
                     Spacer()
                     if !chat.busy && !chat.history.isEmpty {
                         Button { confirmRetry = true } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44) }
@@ -354,7 +377,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.6.3")
+                    Text("Crimson Core Minimal · 0.6.4")
                     Text("Rust Core " + coreVersion)
                 }
             }

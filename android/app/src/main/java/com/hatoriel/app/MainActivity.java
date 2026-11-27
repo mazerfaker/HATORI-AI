@@ -13,7 +13,8 @@ public final class MainActivity extends Activity {
     private final int accent=CrimsonAvatar.RED;
     private CrimsonAvatar avatar;
     private VoiceOutput voice;
-    private boolean voiceMode, foreground;
+    private boolean voiceMode, foreground, externalDictation;
+    private CrimsonAvatar welcomeAvatar;
     private Long voiceReplyJob;
     private TextView voiceState;
     private static final int DICTATION=72;
@@ -52,8 +53,8 @@ public final class MainActivity extends Activity {
         prefs.edit().putString("history",history.toString()).apply();
     }
     private void render(){
-        messages.removeAllViews();
-        if(history.length()==0&&active==null){CrimsonAvatar welcome=new CrimsonAvatar(this);messages.addView(welcome,new LinearLayout.LayoutParams(-1,dp(160)));TextView greeting=label("Готова до діалогу",20);greeting.setGravity(android.view.Gravity.CENTER);messages.addView(greeting);TextView hint=label("Чим можу допомогти?",14);hint.setGravity(android.view.Gravity.CENTER);messages.addView(hint);}
+        messages.removeAllViews();welcomeAvatar=null;
+        if(history.length()==0&&active==null){CrimsonAvatar welcome=new CrimsonAvatar(this);welcomeAvatar=welcome;welcome.setMotion(prefs.getBoolean("avatar_motion",true));messages.addView(welcome,new LinearLayout.LayoutParams(-1,dp(160)));TextView greeting=label("Готова до діалогу",20);greeting.setGravity(android.view.Gravity.CENTER);messages.addView(greeting);TextView hint=label("Чим можу допомогти?",14);hint.setGravity(android.view.Gravity.CENTER);messages.addView(hint);}
         for(int i=0;i<history.length();i++){
             JSONObject m=history.optJSONObject(i);if(m==null)continue;
             boolean user="user".equals(m.optString("role"));
@@ -76,7 +77,7 @@ public final class MainActivity extends Activity {
         root.setOnApplyWindowInsetsListener((v,insets)->{if(android.os.Build.VERSION.SDK_INT>=30){android.graphics.Insets bars=insets.getInsets(android.view.WindowInsets.Type.systemBars()|android.view.WindowInsets.Type.ime());v.setPadding(dp(14)+bars.left,dp(12)+bars.top,dp(14)+bars.right,dp(12)+bars.bottom);if(bottomNav!=null)bottomNav.setVisibility(insets.isVisible(android.view.WindowInsets.Type.ime())?View.GONE:View.VISIBLE);}return insets;});
         if(android.os.Build.VERSION.SDK_INT<30)root.setFitsSystemWindows(true);
         LinearLayout header=new LinearLayout(this);header.setOrientation(LinearLayout.HORIZONTAL);header.setGravity(android.view.Gravity.CENTER_VERTICAL);root.addView(header);
-        avatar=new CrimsonAvatar(this);header.addView(avatar,new LinearLayout.LayoutParams(dp(56),dp(56)));
+        avatar=new CrimsonAvatar(this);avatar.setMotion(prefs.getBoolean("avatar_motion",true));header.addView(avatar,new LinearLayout.LayoutParams(dp(56),dp(56)));
         LinearLayout brand=new LinearLayout(this);brand.setOrientation(LinearLayout.VERTICAL);header.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
         TextView title=label("H A T O R I E L",20);title.setTypeface(null,android.graphics.Typeface.BOLD);brand.addView(title);
         TextView edition=label("CRIMSON CORE",11);edition.setTextColor(accent);brand.addView(edition);
@@ -102,6 +103,7 @@ public final class MainActivity extends Activity {
         CheckBox background=new CheckBox(this);background.setText("Продовжувати генерацію після згортання");background.setChecked(prefs.getBoolean("background_generation",false));settings.addView(background);
         background.setOnCheckedChangeListener((b,value)->{prefs.edit().putBoolean("background_generation",value).apply();if(value&&android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},46);});
         settings.addView(label("Фоновий режим лише для поточного запиту, до 5 хвилин. Постійний індикатор Android дозволяє зупинити генерацію.",12));
+        CheckBox avatarMotion=new CheckBox(this);avatarMotion.setText("Анімація аватара");avatarMotion.setChecked(prefs.getBoolean("avatar_motion",true));settings.addView(avatarMotion);avatarMotion.setOnCheckedChangeListener((b,value)->{prefs.edit().putBoolean("avatar_motion",value).apply();avatar.setMotion(value);if(welcomeAvatar!=null)welcomeAvatar.setMotion(value);});
         CheckBox englishVoice=new CheckBox(this);englishVoice.setText("English voice / dictation");englishVoice.setChecked(prefs.getBoolean("voice_english",false));settings.addView(englishVoice);englishVoice.setOnCheckedChangeListener((b,value)->prefs.edit().putBoolean("voice_english",value).apply());
         settings.addView(label("Диктування відкриває системний сервіс Android, який може використовувати мережу. Озвучування обирає встановлений локальний голос.",12));
         clear=new Button(this);clear.setText("Очистити історію");settings.addView(clear);
@@ -124,12 +126,18 @@ public final class MainActivity extends Activity {
         send.setOnClickListener(v->generate());stop.setOnClickListener(v->{voiceReplyJob=null;voice.stop();GenerationSession.cancel();syncSession();});
         setContentView(root);root.requestApplyInsets();render();busy(false);syncSession();MobileReminders.channel(this);
     }
-    private void updateVoiceState(){if(voiceState==null||voice==null)return;voiceState.setVisibility(voiceMode?View.VISIBLE:View.GONE);if(voiceMode)voiceState.setText(GenerationSession.active!=null?"Обробка репліки":voice.speaking()?"Озвучування":"Готова до репліки · диктуй, перевір текст, надішли");}
+    private void updateVoiceState(){
+        if(voiceState==null||voice==null)return;
+        CrimsonAvatar.State state=CrimsonAvatar.State.select(externalDictation,GenerationSession.active!=null,!GenerationSession.partial.isEmpty(),voice.speaking());
+        avatar.setState(state);if(welcomeAvatar!=null)welcomeAvatar.setState(state);
+        voiceState.setVisibility(voiceMode?View.VISIBLE:View.GONE);
+        if(voiceMode)voiceState.setText(state==CrimsonAvatar.State.IDLE?"Готова до репліки · диктуй, перевір текст, надішли":state.label);
+    }
     private String voiceLanguage(){return prefs.getBoolean("voice_english",false)?"en-US":"uk-UA";}
     private void dictate(){
         if(GenerationSession.active!=null)return;
         new AlertDialog.Builder(this).setTitle("Системне диктування").setMessage("Android відкриє встановлений сервіс розпізнавання. Він може передавати аудіо через мережу, навіть якщо запитано офлайн-режим. Результат стане чернеткою, не буде надісланий автоматично.").setNegativeButton("Скасувати",null).setPositiveButton("Продовжити",(d,w)->{
-            if(GenerationSession.active!=null)return;voice.stop();android.content.Intent i=new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE,voiceLanguage());i.putExtra(android.speech.RecognizerIntent.EXTRA_PREFER_OFFLINE,true);i.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS,1);try{startActivityForResult(i,DICTATION);}catch(android.content.ActivityNotFoundException e){status.setText("Сервіс диктування недоступний");}
+            if(GenerationSession.active!=null)return;voice.stop();android.content.Intent i=new android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);i.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE,voiceLanguage());i.putExtra(android.speech.RecognizerIntent.EXTRA_PREFER_OFFLINE,true);i.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS,1);try{externalDictation=true;updateVoiceState();startActivityForResult(i,DICTATION);}catch(android.content.ActivityNotFoundException e){externalDictation=false;updateVoiceState();status.setText("Сервіс диктування недоступний");}
         }).show();
     }
     private void showSettings(boolean visible){if(visible){voiceReplyJob=null;voice.stop();}settingsScroll.setVisibility(visible?View.VISIBLE:View.GONE);scroll.setVisibility(visible?View.GONE:View.VISIBLE);composer.setVisibility(visible?View.GONE:View.VISIBLE);}
@@ -173,7 +181,7 @@ public final class MainActivity extends Activity {
         updateVoiceState();if(sessionRevision==GenerationSession.revision)return;
         sessionRevision=GenerationSession.revision;
         ChatTransport previous=active;active=GenerationSession.active;
-        draftText=GenerationSession.partial;avatar.setBusy(active!=null);
+        draftText=GenerationSession.partial;
         if(previous!=active||active==null){
             try{history=new JSONArray(prefs.getString("history","[]"));}catch(JSONException ignored){}
             render();busy(active!=null);
@@ -321,6 +329,6 @@ public final class MainActivity extends Activity {
         refresh.run();new AlertDialog.Builder(this).setTitle("Нагадування Hatoriel").setView(sv).setPositiveButton("Закрити",null).show();
     }
     private void refreshLocalModel(){try{java.io.File file=ModelImport.selected(this);localModelStatus.setText(file.isFile()?String.format(java.util.Locale.ROOT,"GGUF: %.2f GiB · імпортовано, запуск ще недоступний",file.length()/1073741824.0):"GGUF не імпортовано");}catch(java.io.IOException e){localModelStatus.setText(e.getMessage());}}
-    @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request==DICTATION){if(result==RESULT_OK&&data!=null&&GenerationSession.active==null){java.util.ArrayList<String> values=data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);if(values!=null&&!values.isEmpty()&&values.get(0)!=null){String old=input.getText().toString(),next=old.isEmpty()?values.get(0):old+" "+values.get(0);int n=next.codePointCount(0,next.length());if(n>12000)next=next.substring(0,next.offsetByCodePoints(0,12000));input.setText(next);input.setSelection(next.length());status.setText("Чернетка готова");}}return;}if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);hardwareButton.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);hardwareButton.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
+    @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request==DICTATION){externalDictation=false;updateVoiceState();if(result==RESULT_OK&&data!=null&&GenerationSession.active==null){java.util.ArrayList<String> values=data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);if(values!=null&&!values.isEmpty()&&values.get(0)!=null){String old=input.getText().toString(),next=old.isEmpty()?values.get(0):old+" "+values.get(0);int n=next.codePointCount(0,next.length());if(n>12000)next=next.substring(0,next.offsetByCodePoints(0,12000));input.setText(next);input.setSelection(next.length());status.setText("Чернетка готова");}}return;}if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);hardwareButton.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);hardwareButton.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
     @Override protected void onDestroy(){destroyed=true;if(voice!=null)voice.close();if(importWorker!=null)importWorker.interrupt();sessionHandler.removeCallbacks(sessionWatch);if(isFinishing()&&!GenerationSession.background)GenerationSession.cancel();super.onDestroy();}
 }
