@@ -1,12 +1,12 @@
 use crate::inference::{Backend,Message};
-use std::{io::{BufRead,BufReader},time::Duration};
+use std::{io::{BufRead,BufReader,Read},time::Duration};
 pub struct Llama;
 impl Backend for Llama {
  fn generate(&self,model:&str,messages:&[Message],emit:&mut dyn FnMut(String)->bool)->Result<(),String>{
  (||->Result<(),Box<dyn std::error::Error>>{
  let client=reqwest::blocking::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(4)).timeout(Duration::from_secs(300)).build()?;
  let response=client.post("http://127.0.0.1:8080/v1/chat/completions").json(&serde_json::json!({"model":model,"messages":messages,"stream":true})).send()?.error_for_status()?;
- decode(BufReader::new(response),emit)
+ decode(BufReader::new(response.take(4*1024*1024)),emit)
  })().map_err(|e|e.to_string())
  }
  fn models(&self)->Result<Vec<String>,String>{

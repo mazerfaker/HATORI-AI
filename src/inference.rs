@@ -1,5 +1,5 @@
 use serde::{Serialize,Deserialize};
-use std::{io::{BufRead,BufReader},time::Duration};
+use std::{io::{BufRead,BufReader,Read},time::Duration};
 #[derive(Clone,Debug,Serialize,Deserialize)]
 pub struct Message { pub role:String,pub content:String }
 pub trait Backend: Send+Sync {
@@ -12,7 +12,7 @@ impl Backend for Ollama {
   (||->Result<(),Box<dyn std::error::Error>>{
    let client=reqwest::blocking::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(4)).timeout(Duration::from_secs(300)).build()?;
    let response=client.post("http://127.0.0.1:11434/api/chat").json(&serde_json::json!({"model":model,"messages":messages,"stream":true})).send()?.error_for_status()?;
-   decode(BufReader::new(response),emit)
+   decode(BufReader::new(response.take(4*1024*1024)),emit)
   })().map_err(|e|e.to_string())
  }
  fn models(&self)->Result<Vec<String>,String>{

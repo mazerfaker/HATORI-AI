@@ -53,11 +53,12 @@ pub fn run_with_multimodal(backend:&dyn Backend,req:&Request,reference:Option<&s
   if let Err(e)=crate::multimodal::apply(&mut messages,reference,images,budget){emit(Event::Error(e));return;}
  }
  let mut disconnected=false;
+ let mut output_bytes=0usize;let mut overflow=false;
  let result=backend.generate(&req.model,&messages,&mut |token|{
-  if cancel(){return false;}let ok=emit(Event::Token(token));if !ok{disconnected=true;}ok
+  if cancel(){return false;}output_bytes=output_bytes.saturating_add(token.len());if output_bytes>262144{overflow=true;return false;}let ok=emit(Event::Token(token));if !ok{disconnected=true;}ok
  });
  if disconnected{return;}
- emit(if cancel(){Event::Cancelled}else{match result{Ok(())=>Event::Done,Err(e)=>Event::Error(e)}});
+ emit(if cancel(){Event::Cancelled}else if overflow{Event::Error("Response exceeded 256 KiB limit".into())}else{match result{Ok(())=>Event::Done,Err(e)=>Event::Error(e)}});
 }
 #[cfg(test)]mod tests{
  use super::*;
@@ -69,5 +70,19 @@ pub fn run_with_multimodal(backend:&dyn Backend,req:&Request,reference:Option<&s
  fn request()->Request{Request{model:"mock".into(),mode:"Companion".into(),traits:[50;7],query:"hi".into(),history:vec![Message{role:"user".into(),content:"hi".into()}],memories:vec![],profile:Default::default(),mood:None,dynamic_style:true,embedding_model:None}}
  #[test]fn events(){let mut out=vec![];run(&Mock,&request(),&||false,|e|{out.push(e);true});assert_eq!(out,vec![Event::Token("ok".into()),Event::Done]);}
  #[test]fn cancelled_before_start(){let mut out=vec![];run(&Mock,&request(),&||true,|e|{out.push(e);true});assert_eq!(out,vec![Event::Cancelled]);}
+ #[test]fn oversized_response_is_rejected(){
+  struct Huge;impl Backend for Huge{
+   fn models(&self)->Result<Vec<String>,String>{Ok(vec![])}
+   fn generate(&self,_:&str,_:&[Message],emit:&mut dyn FnMut(String)->bool)->Result<(),String>{let _=emit("x".repeat(262145));Ok(())}
+  }
+  let mut out=vec![];run(&Huge,&request(),&||false,|e|{out.push(e);true});assert_eq!(out,vec![Event::Error("Response exceeded 256 KiB limit".into())]);
+ }
+ #[test]fn reference_scope(){
+  struct Inspect;impl Backend for Inspect{
+   fn models(&self)->Result<Vec<String>,String>{Ok(vec![])}
+   fn generate(&self,_:&str,m:&[Message],_:&mut dyn FnMut(String)->bool)->Result<(),String>{assert!(m[0].content.contains("untrusted"));assert!(m.last().unwrap().content.contains("secret excerpt"));Ok(())}
+  }
+  let req=request();let mut out=vec![];run_with_multimodal(&Inspect,&req,Some("secret excerpt"),1,24000,&||false,|e|{out.push(e);true});assert_eq!(out,vec![Event::Done]);assert!(!req.history[0].content.contains("secret excerpt"));
+ }
  #[test]fn unicode_budget(){let m=vec![Message{role:"user".into(),content:"абвг".into()}];assert_eq!(recent_context(&m,32,2)[0].content,"аб");}
 }
