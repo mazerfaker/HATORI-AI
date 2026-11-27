@@ -13,7 +13,7 @@ fn extension(name:&str)->String{Path::new(name).extension().and_then(|s|s.to_str
 pub fn supported(name:&str)->bool{
  matches!(extension(name).as_str(),"pdf"|"docx"|"txt"|"md"|"markdown"|"csv"|"tsv"|"json"|"jsonl"|"xml"|"yaml"|"yml"|"toml"|"ini"|"log"|"rs"|"py"|"js"|"ts"|"tsx"|"jsx"|"html"|"css"|"java"|"kt"|"swift"|"c"|"h"|"cpp"|"hpp"|"cs"|"gd"|"lua"|"sql"|"sh"|"ps1"|"bat")
 }
-fn plain(bytes:&[u8])->Result<String,String>{
+pub(crate) fn plain(bytes:&[u8])->Result<String,String>{
  if bytes.starts_with(&[0xff,0xfe])||bytes.starts_with(&[0xfe,0xff]){
   if bytes.len()%2!=0{return Err("Invalid UTF-16".into());}
   let little=bytes[0]==0xff;

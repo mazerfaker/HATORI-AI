@@ -18,6 +18,7 @@ mod speech_recognition;
 mod attachments;
 mod documents;
 mod computer;
+mod file_access;
 use hatori_ai::{core, memory_suggest, proactive, emotion, adaptive, memory_core, model_manager, inference::{Backend, Ollama, Message}, llama_backend::Llama};
 use serde::{Serialize, Deserialize};
 use std::{sync::mpsc, time::Duration};

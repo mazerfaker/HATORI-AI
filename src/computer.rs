@@ -5,14 +5,17 @@ use rusqlite::{Connection,params};
 const TTL:Duration=Duration::from_secs(60);
 const MAX_AUDIT:usize=200;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum Action{InspectStatus,OpenData}
+enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText}
 impl Action{
- fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data"}}
+ fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data",Self::GrantFolder=>"grant_folder",Self::ListFolder=>"list_folder",Self::ReadText=>"read_text"}}
  fn label(self,en:bool)->&'static str{match (self,en){
   (Self::InspectStatus,true)=>"Inspect local application status",
   (Self::InspectStatus,false)=>"Переглянути локальний стан застосунку",
   (Self::OpenData,true)=>"Open Hatoriel data folder in Explorer",
   (Self::OpenData,false)=>"Відкрити папку даних Hatoriel у Провіднику",
+  (Self::GrantFolder,true)=>"Grant read-only folder access", (Self::GrantFolder,false)=>"Дозволити читання папки",
+  (Self::ListFolder,true)=>"List granted folder", (Self::ListFolder,false)=>"Переглянути вміст папки",
+  (Self::ReadText,true)=>"Preview local text file", (Self::ReadText,false)=>"Прочитати текстовий файл",
  }}
 }
 #[derive(Clone,Debug)]
@@ -26,7 +29,7 @@ impl Gate{
  fn propose(&mut self,action:Action,target:Option<PathBuf>,now:Instant)->Result<(),String>{
   if !self.enabled{return Err("Computer interaction disabled".into());}
   if self.pending.is_some(){return Err("Resolve the existing proposal first".into());}
-  if (action==Action::OpenData)!=target.is_some(){return Err("Invalid action target".into());}
+  if (action!=Action::InspectStatus)!=target.is_some(){return Err("Invalid action target".into());}
   self.pending=Some(Proposal{action,target,created:now});Ok(())
  }
  fn approve(&mut self,now:Instant)->Result<Proposal,String>{
@@ -77,28 +80,53 @@ fn open_data(target:&Path)->Result<String,String>{
 #[cfg(not(windows))]
 fn open_data(_: &Path)->Result<String,String>{Err("Explorer action is Windows only".into())}
 #[derive(Default)]
-pub struct Computer{gate:Gate,status:String}
+pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>}
 impl Computer{
- pub fn leave(&mut self){self.gate.cancel();}
+ pub fn leave(&mut self){self.gate.cancel();self.preview=None;}
+ fn clear_view(&mut self){self.current=None;self.entries.clear();self.preview=None;}
+ fn request(&mut self,action:Action,target:PathBuf){match self.gate.propose(action,Some(target),Instant::now()){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}}
  pub fn panel(&mut self,ui:&mut egui::Ui,db:Option<&Connection>,busy:bool,en:bool,backend:&str,model:&str,bridge:bool){
   self.gate.expire(Instant::now());
-  ui.heading(if en{"Computer interaction · Foundation"}else{"Взаємодія з комп’ютером · Foundation"});
-  ui.label(if en{"Local, manual requests only. No AI-generated commands, remote requests, arbitrary file reads or modifications."}else{"Лише локальні ручні запити. Без команд від ШІ, віддалених дій, довільного читання або зміни файлів."});
+  ui.heading(if en{"Computer interaction · File Access"}else{"Взаємодія з комп’ютером · File Access"});
+  ui.label(if en{"Local, manual requests only. No AI-generated commands, remote requests or file modifications. Only explicitly granted folders."}else{"Лише локальні ручні запити. Без команд від ШІ, віддалених дій або зміни файлів. Лише дозволені папки."});
   let mut enabled=self.gate.enabled;
-  if ui.checkbox(&mut enabled,if en{"Enable actions for this session"}else{"Дозволити дії в поточному сеансі"}).changed(){self.gate.enable(enabled);self.status=if enabled{"Session permission granted / Дозвіл надано".into()}else{"Permission revoked / Дозвіл відкликано".into()};}
+  if ui.checkbox(&mut enabled,if en{"Enable actions for this session"}else{"Дозволити дії в поточному сеансі"}).changed(){self.gate.enable(enabled);if !enabled{self.scopes.clear();self.clear_view();}self.status=if enabled{"Session permission granted / Дозвіл надано".into()}else{"Permission revoked / Дозвіл відкликано".into()};}
   if busy{self.gate.cancel();}
   if db.is_none(){ui.label("Action journal unavailable. Execution blocked / Журнал недоступний. Дії заблоковані.");self.gate.cancel();}
   let can=self.gate.enabled&&!busy&&db.is_some()&&self.gate.pending.is_none();
   for action in [Action::InspectStatus,Action::OpenData]{
    if ui.add_enabled(can&&(action!=Action::OpenData||cfg!(windows)),egui::Button::new(action.label(en))).clicked(){
-    let target=match action{Action::InspectStatus=>Ok(None),Action::OpenData=>local_data().map(Some)};
+    let target=match action{Action::InspectStatus=>Ok(None),Action::OpenData=>local_data().map(Some),_=>Err("Invalid quick action".into())};
     match target.and_then(|t|self.gate.propose(action,t,Instant::now())){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}
    }
   }
+  ui.separator();ui.heading("Read-only folders / Дозволені папки");
+  ui.small("Session-only grants. No writes, no recursive scan, no automatic model access. / Дозволи лише на сеанс.");
+  #[cfg(windows)]
+  if ui.add_enabled(can&&self.scopes.roots().len()<crate::file_access::MAX_ROOTS,egui::Button::new("Choose folder / Обрати папку")).clicked(){
+   if let Some(path)=rfd::FileDialog::new().pick_folder(){self.request(Action::GrantFolder,path);}
+  }
+  let mut revoke=None;let mut request=None;
+  for root in self.scopes.roots(){
+   ui.horizontal_wrapped(|ui|{ui.label(root.display().to_string());if ui.add_enabled(can,egui::Button::new("List / Вміст")).clicked(){request=Some((Action::ListFolder,root.clone()));}if ui.button("Revoke / Відкликати").clicked(){revoke=Some(root.clone());}});
+  }
+  if let Some(path)=revoke{self.gate.cancel();self.scopes.remove(&path);self.clear_view();request=None;self.status="Folder access revoked / Доступ відкликано".into();}
+  if let Some(current)=&self.current{
+   ui.label(current.display().to_string());
+   if let Some(parent)=current.parent(){if self.scopes.roots().iter().any(|r|parent.starts_with(r))&&ui.add_enabled(can,egui::Button::new("Up / Назад")).clicked(){request=Some((Action::ListFolder,parent.to_path_buf()));}}
+   egui::ScrollArea::vertical().id_salt("computer-files").max_height(220.).show(ui,|ui|{
+    for entry in &self.entries{ui.horizontal(|ui|{
+     let title=if entry.dir{format!("[DIR] {}",entry.name)}else{format!("{} · {} bytes",entry.name,entry.bytes)};
+     if ui.add_enabled(can,egui::Button::new(title)).clicked(){request=Some((if entry.dir{Action::ListFolder}else{Action::ReadText},entry.path.clone()));}
+    });}
+   });
+  }
+  if let Some((action,target))=request{if self.gate.pending.is_none(){self.request(action,target);}}
+  if let Some((path,text))=&self.preview{ui.label(path.display().to_string());egui::ScrollArea::vertical().id_salt("computer-file-preview").max_height(180.).show(ui,|ui|{ui.label(text);});if ui.button("Close preview / Закрити").clicked(){self.preview=None;}}
   if let Some(p)=self.gate.pending.as_ref(){
    ui.separator();ui.label(egui::RichText::new("REVIEW / ПІДТВЕРДЖЕННЯ").color(crate::crimson::RED).strong());
    ui.label(p.action.label(en));
-   if let Some(path)=&p.target{ui.label(path.display().to_string());ui.small("Opens Explorer; does not read file contents. / Відкриває Провідник, не читає файли.");}
+   if let Some(path)=&p.target{ui.label(path.display().to_string());ui.small(match p.action{Action::OpenData=>"Opens Explorer, no content read.",Action::GrantFolder=>"Grants read-only access for this session, not automatic scanning.",Action::ListFolder=>"Lists at most 200 immediate entries, no recursion.",Action::ReadText=>"Reads at most 64 KiB of supported plain text, displayed locally.",_=>""});}
    else{ui.small("Displays current backend, selected model, app storage mode and bridge state. / Лише стан застосунку.");}
    ui.small(format!("{} s · one-time approval",TTL.saturating_sub(p.created.elapsed()).as_secs()));
    let mut approve=false;let mut cancel=false;
@@ -115,11 +143,14 @@ impl Computer{
         let result=match p.action{
          Action::InspectStatus=>Ok(format!("Backend: {backend}\nModel: {model}\nStorage: {}\nBridge: {}",if crate::storage::portable(){"portable"}else{"installed"},if bridge{"running"}else{"stopped"})),
          Action::OpenData=>p.target.as_deref().ok_or_else(||"Missing approved target".to_string()).and_then(open_data),
+         Action::GrantFolder=>p.target.as_deref().ok_or_else(||"Missing folder".to_string()).and_then(|path|self.scopes.grant(path)).map(|_|"Read-only grant added / Дозвіл надано".into()),
+         Action::ListFolder=>p.target.as_deref().ok_or_else(||"Missing folder".to_string()).and_then(|path|self.scopes.list(path)).map(|(entries,capped)|{self.current=p.target.clone();self.preview=None;let n=entries.len();self.entries=entries;format!("{n} entries{}",if capped{" · capped at 200 scanned entries"}else{""})}),
+         Action::ReadText=>p.target.as_deref().ok_or_else(||"Missing file".to_string()).and_then(|path|self.scopes.read_text(path)).map(|text|{self.preview=p.target.clone().map(|path|(path,text));"Local text preview / Локальне прев’ю".into()}),
         };
         let outcome=if result.is_ok(){if p.action==Action::OpenData{"launch_requested"}else{"completed"}}else{"failed"};
         self.status=match result{Ok(s)=>s,Err(e)=>format!("Action failed: {e}")};
-        if finish(db,id,outcome).is_err(){self.status.push_str("\nAudit completion write failed; initial approval remains recorded.");self.gate.enable(false);}
-       },Err(e)=>{self.status=format!("Action blocked: audit write failed: {e}");self.gate.enable(false);}
+        if finish(db,id,outcome).is_err(){self.status.push_str("\nAudit completion write failed; initial approval remains recorded.");self.gate.enable(false);self.scopes.clear();self.clear_view();}
+       },Err(e)=>{self.status=format!("Action blocked: audit write failed: {e}");self.gate.enable(false);self.scopes.clear();self.clear_view();}
       }
      },
      Err(e)=>self.status=e,
