@@ -82,7 +82,7 @@ impl Draft{
    ui.label(format!("{}/4 · Drop files / Перетягни файли",self.items.len()));
   });
   if !self.empty(){
-   ui.label(if self.image_only(){"PNG/JPEG · vision via local Ollama only / Аналіз через локальний Ollama"}else{"Documents are not supported yet / Аналіз документів ще недоступний"});
+   ui.label(if self.image_only(){"PNG/JPEG · vision via local Ollama only / Аналіз через локальний Ollama"}else{"Documents · extract and review first / Спочатку вилучи й перевір текст"});
    let mut remove=None;
    egui::ScrollArea::vertical().id_salt("attachment-draft").max_height(144.).show(ui,|ui|{
     for (i,a) in self.items.iter().enumerate(){ui.horizontal(|ui|{
