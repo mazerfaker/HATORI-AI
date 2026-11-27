@@ -57,10 +57,11 @@ impl Draft{
   self.add(ctx,"clipboard.png",bytes)
  }
  pub fn image_only(&self)->bool{!self.empty()&&self.items.iter().all(|a|a.preview.is_some())}
+ pub fn image_count(&self)->usize{self.items.iter().filter(|a|a.preview.is_some()).count()}
  pub fn normalized(&self)->Result<Vec<Vec<u8>>,String>{
-  if !self.image_only(){return Err("Only valid PNG and JPEG images are supported for vision".into());}
+  if self.image_count()==0{return Err("Only valid PNG and JPEG images are supported for vision".into());}
   let mut out=Vec::new();
-  for a in &self.items{
+  for a in self.items.iter().filter(|a|a.preview.is_some()){
    let mut reader=image::ImageReader::new(std::io::Cursor::new(&a.bytes)).with_guessed_format().map_err(|e|e.to_string())?;
    let mut limits=image::Limits::default();limits.max_image_width=Some(4096);limits.max_image_height=Some(4096);limits.max_alloc=Some(80*1024*1024);reader.limits(limits);
    let image=reader.decode().map_err(|e|e.to_string())?.thumbnail(1536,1536).to_rgb8();
@@ -82,7 +83,7 @@ impl Draft{
    ui.label(format!("{}/4 · Drop files / Перетягни файли",self.items.len()));
   });
   if !self.empty(){
-   ui.label(if self.image_only(){"PNG/JPEG · vision via local Ollama only / Аналіз через локальний Ollama"}else{"Documents · extract and review first / Спочатку вилучи й перевір текст"});
+   ui.label(if self.image_only(){"PNG/JPEG · vision via local Ollama only / Аналіз через локальний Ollama"}else{"Documents / mixed files · review before sending / Перевір перед надсиланням"});
    let mut remove=None;
    egui::ScrollArea::vertical().id_salt("attachment-draft").max_height(144.).show(ui,|ui|{
     for (i,a) in self.items.iter().enumerate(){ui.horizontal(|ui|{

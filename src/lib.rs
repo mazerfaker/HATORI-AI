@@ -23,3 +23,5 @@ pub mod mobile_context;
 pub mod sync;
 
 pub mod vision;
+
+pub mod multimodal;
