@@ -22,7 +22,7 @@ impl Backend for Ollama {
   })().map_err(|e|e.to_string())
  }
 }
-fn decode(reader:impl BufRead,emit:&mut dyn FnMut(String)->bool)->Result<(),Box<dyn std::error::Error>>{
+pub(crate) fn decode(reader:impl BufRead,emit:&mut dyn FnMut(String)->bool)->Result<(),Box<dyn std::error::Error>>{
  for line in reader.lines(){let line=line?;if line.trim().is_empty(){continue;}let v:serde_json::Value=serde_json::from_str(&line)?;
  if let Some(e)=v["error"].as_str(){return Err(e.to_owned().into());}
  if let Some(s)=v["message"]["content"].as_str(){if !emit(s.into()){return Err("Generation cancelled".into());}}

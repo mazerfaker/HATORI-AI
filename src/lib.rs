@@ -21,3 +21,5 @@ pub mod memory_suggest;
 pub mod mobile_context;
 
 pub mod sync;
+
+pub mod vision;

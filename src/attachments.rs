@@ -56,6 +56,20 @@ impl Draft{
   image::codecs::png::PngEncoder::new(&mut bytes).write_image(img.bytes.as_ref(),img.width as u32,img.height as u32,image::ExtendedColorType::Rgba8).map_err(|e|e.to_string())?;
   self.add(ctx,"clipboard.png",bytes)
  }
+ pub fn image_only(&self)->bool{!self.empty()&&self.items.iter().all(|a|a.preview.is_some())}
+ pub fn normalized(&self)->Result<Vec<Vec<u8>>,String>{
+  if !self.image_only(){return Err("Only valid PNG and JPEG images are supported for vision".into());}
+  let mut out=Vec::new();
+  for a in &self.items{
+   let mut reader=image::ImageReader::new(std::io::Cursor::new(&a.bytes)).with_guessed_format().map_err(|e|e.to_string())?;
+   let mut limits=image::Limits::default();limits.max_image_width=Some(4096);limits.max_image_height=Some(4096);limits.max_alloc=Some(80*1024*1024);reader.limits(limits);
+   let image=reader.decode().map_err(|e|e.to_string())?.thumbnail(1536,1536).to_rgb8();
+   let mut bytes=Vec::new();
+   image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes,88).encode(image.as_raw(),image.width(),image.height(),image::ExtendedColorType::Rgb8).map_err(|e|e.to_string())?;
+   out.push(bytes);
+  }
+  Ok(out)
+ }
  pub fn panel(&mut self,ui:&mut egui::Ui,enabled:bool){
   ui.horizontal_wrapped(|ui|{
    #[cfg(windows)]{
@@ -68,7 +82,7 @@ impl Draft{
    ui.label(format!("{}/4 · Drop files / Перетягни файли",self.items.len()));
   });
   if !self.empty(){
-   ui.label("Attachments cannot be sent yet. Remove them to send text. / Аналіз ще недоступний. Видали вкладення, щоб надіслати текст.");
+   ui.label(if self.image_only(){"PNG/JPEG · vision via local Ollama only / Аналіз через локальний Ollama"}else{"Documents are not supported yet / Аналіз документів ще недоступний"});
    let mut remove=None;
    egui::ScrollArea::vertical().id_salt("attachment-draft").max_height(144.).show(ui,|ui|{
     for (i,a) in self.items.iter().enumerate(){ui.horizontal(|ui|{
