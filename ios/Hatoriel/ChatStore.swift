@@ -207,6 +207,12 @@ struct ChatEntry: Codable, Identifiable {
             connectionStatus = "Перевірка: " + error.localizedDescription
         }
     }
+    func receiveFile(code: String, progress: @escaping @MainActor (Int) -> Void) async throws -> (String, Data) {
+        guard desktopMode && !busy && !checkingConnection else { throw CoreFailure.rejected("Підключи шлюз ПК") }
+        checkingConnection = true
+        defer { checkingConnection = false }
+        return try await ChatTransport.receiveFile(base: endpoint, key: sessionKey, code: code, progress: progress)
+    }
     func forgetDesktopKey() {
         guard !busy && !checkingConnection else { return }
         sessionKey = ""

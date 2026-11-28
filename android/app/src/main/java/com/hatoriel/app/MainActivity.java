@@ -13,7 +13,10 @@ public final class MainActivity extends Activity {
     private final int accent=CrimsonAvatar.RED;
     private CrimsonAvatar avatar;
     private VoiceOutput voice;
-    private static final int ATTACH=73;
+    private static final int ATTACH=73, SAVE_TRANSFER=74;
+    private FileTransfer transfer;
+    private FileTransfer.Received receivedTransfer;
+    private TextView transferStatus;
     private final AttachmentDraft attachments=new AttachmentDraft();
     private LinearLayout attachmentRows;
     private boolean attaching;
@@ -102,6 +105,10 @@ public final class MainActivity extends Activity {
             try{java.net.URL url=ChatTransport.endpoint(b);if(!key.isEmpty()&&(!"https".equalsIgnoreCase(url.getProtocol())||!key.matches("[0-9a-f]{64}")))throw new IllegalArgumentException("Для ключа потрібен HTTPS та 64 hex-символи");if(m.isEmpty())throw new IllegalArgumentException("Вкажи модель");
                 new AlertDialog.Builder(this).setTitle("Підтвердити сервер").setMessage("Повідомлення, частина історії та, якщо дозволено, профіль і релевантні спогади надсилатимуться на "+b+". Продовжити?").setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{if(!base.equals(b))memory.setEnabled(false);base=b;model=m;bridgeKey=key;bridgeEndpoint=key.isEmpty()?"":b;prefs.edit().putString("endpoint",b).putString("model",m).apply();showSettings(false);status.setText("Сервер налаштовано (ще не перевірено)");}).show();
             }catch(Exception e){status.setText(e.getMessage());}});
+        EditText transferCode=field("","Одноразовий код файлу з ПК");transferCode.setSaveEnabled(false);settings.addView(transferCode);
+        transferStatus=label("Файл із ПК · до 8 МіБ",12);settings.addView(transferStatus);
+        Button receiveFile=new Button(this);receiveFile.setText("Отримати файл з ПК");settings.addView(receiveFile);receiveFile.setOnClickListener(v->{String code=transferCode.getText().toString().trim();transferCode.setText("");receiveTransfer(code);});
+        Button cancelFile=new Button(this);cancelFile.setText("Скасувати отримання");settings.addView(cancelFile);cancelFile.setOnClickListener(v->{if(transfer!=null)transfer.cancel();receivedTransfer=null;transferStatus.setText("Скасовано");});
         localModelStatus=label("Локальна модель: підготовка runtime",12);settings.addView(localModelStatus);
         importModel=new Button(this);importModel.setText("Імпортувати GGUF");settings.addView(importModel);
         importModel.setOnClickListener(v->{if(importing||active!=null)return;new AlertDialog.Builder(this).setTitle("Імпорт локальної моделі").setMessage("Файл копіюється в приватне сховище Hatoriel. Попередня локальна модель буде замінена після успішного імпорту. Запуск моделі ще експериментальний і не підключений.").setNegativeButton("Скасувати",null).setPositiveButton("Обрати файл",(d,w)->{android.content.Intent intent=new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);intent.setType("*/*");intent.addCategory(android.content.Intent.CATEGORY_OPENABLE);try{startActivityForResult(intent,71);}catch(android.content.ActivityNotFoundException e){status.setText("Файловий менеджер недоступний");}}).show();});
@@ -149,6 +156,23 @@ public final class MainActivity extends Activity {
         }).show();
     }
     private void showSettings(boolean visible){if(visible){voiceReplyJob=null;voice.stop();}settingsScroll.setVisibility(visible?View.VISIBLE:View.GONE);scroll.setVisibility(visible?View.GONE:View.VISIBLE);composer.setVisibility(visible?View.GONE:View.VISIBLE);}
+    private void receiveTransfer(String code){
+        if(transfer!=null||receivedTransfer!=null||GenerationSession.active!=null)return;
+        final String server=base,key=base.equals(bridgeEndpoint)?bridgeKey:"";
+        if(key.isEmpty()||!code.matches("[0-9a-f]{32}")){transferStatus.setText("Збережи HTTPS-підключення до ПК та введи 32-символьний код");return;}
+        new AlertDialog.Builder(this).setTitle("Отримати оригінал файлу?").setMessage("Запит до "+server+". Код одноразовий; файл перевіряється за SHA-256 перед збереженням.").setNegativeButton("Скасувати",null).setPositiveButton("Отримати",(d,w)->{
+            if(transfer!=null||!base.equals(server)||!bridgeKey.equals(key))return;
+            FileTransfer job=new FileTransfer();transfer=job;transferStatus.setText("Отримання…");
+            new Thread(()->{FileTransfer.Received result=null;String error=null;try{result=job.receive(server,key,code,p->runOnUiThread(()->{if(!destroyed&&transfer==job)transferStatus.setText("Отримання "+p+"%");}));}catch(Exception e){error=e.getMessage();}
+                final FileTransfer.Received file=result;final String failure=error;runOnUiThread(()->{if(destroyed||transfer!=job)return;transfer=null;
+                    if(file==null||!base.equals(server)||!bridgeKey.equals(key)){transferStatus.setText("Передавання не завершено: "+failure);return;}
+                    receivedTransfer=file;transferStatus.setText("SHA-256 перевірено: "+file.name);
+                    android.content.Intent i=new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);i.setType("application/octet-stream");i.addCategory(android.content.Intent.CATEGORY_OPENABLE);i.putExtra(android.content.Intent.EXTRA_TITLE,file.name);
+                    try{startActivityForResult(i,SAVE_TRANSFER);}catch(android.content.ActivityNotFoundException e){receivedTransfer=null;transferStatus.setText("Збереження недоступне");}
+                });
+            },"hatoriel-file-transfer").start();
+        }).show();
+    }
     private void generate(){
         if(attaching||!attachments.items.isEmpty()){status.setText("Видали вкладення перед надсиланням: аналіз ще недоступний");return;}
         String query=input.getText().toString().trim();if(!ready||GenerationSession.active!=null||query.isEmpty())return;voice.stop();
@@ -356,6 +380,6 @@ public final class MainActivity extends Activity {
         refresh.run();new AlertDialog.Builder(this).setTitle("Нагадування Hatoriel").setView(sv).setPositiveButton("Закрити",null).show();
     }
     private void refreshLocalModel(){try{java.io.File file=ModelImport.selected(this);localModelStatus.setText(file.isFile()?String.format(java.util.Locale.ROOT,"GGUF: %.2f GiB · імпортовано, запуск ще недоступний",file.length()/1073741824.0):"GGUF не імпортовано");}catch(java.io.IOException e){localModelStatus.setText(e.getMessage());}}
-    @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request==ATTACH){if(result==RESULT_OK&&data!=null&&data.getData()!=null)importAttachment(data.getData());return;}if(request==DICTATION){externalDictation=false;updateVoiceState();if(result==RESULT_OK&&data!=null&&GenerationSession.active==null){java.util.ArrayList<String> values=data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);if(values!=null&&!values.isEmpty()&&values.get(0)!=null){String old=input.getText().toString(),next=old.isEmpty()?values.get(0):old+" "+values.get(0);int n=next.codePointCount(0,next.length());if(n>12000)next=next.substring(0,next.offsetByCodePoints(0,12000));input.setText(next);input.setSelection(next.length());status.setText("Чернетка готова");}}return;}if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);hardwareButton.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);hardwareButton.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
-    @Override protected void onDestroy(){destroyed=true;if(attachmentWorker!=null)attachmentWorker.interrupt();attachments.items.clear();if(voice!=null)voice.close();if(importWorker!=null)importWorker.interrupt();sessionHandler.removeCallbacks(sessionWatch);if(isFinishing()&&!GenerationSession.background)GenerationSession.cancel();super.onDestroy();}
+    @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request==SAVE_TRANSFER){FileTransfer.Received file=receivedTransfer;receivedTransfer=null;if(result==RESULT_OK&&file!=null&&data!=null&&data.getData()!=null){android.net.Uri dest=data.getData();new Thread(()->{String message;try(java.io.OutputStream out=getContentResolver().openOutputStream(dest,"wt")){if(out==null)throw new java.io.IOException("Cannot open destination");out.write(file.bytes);message="Файл записано";}catch(Exception e){message="Помилка збереження; можливий неповний файл: "+e.getMessage();}final String m=message;runOnUiThread(()->{if(!destroyed)transferStatus.setText(m);});},"hatoriel-save-transfer").start();}else transferStatus.setText("Збереження скасовано");return;}if(request==ATTACH){if(result==RESULT_OK&&data!=null&&data.getData()!=null)importAttachment(data.getData());return;}if(request==DICTATION){externalDictation=false;updateVoiceState();if(result==RESULT_OK&&data!=null&&GenerationSession.active==null){java.util.ArrayList<String> values=data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);if(values!=null&&!values.isEmpty()&&values.get(0)!=null){String old=input.getText().toString(),next=old.isEmpty()?values.get(0):old+" "+values.get(0);int n=next.codePointCount(0,next.length());if(n>12000)next=next.substring(0,next.offsetByCodePoints(0,12000));input.setText(next);input.setSelection(next.length());status.setText("Чернетка готова");}}return;}if(request!=71||result!=RESULT_OK||data==null||data.getData()==null||importing)return;android.net.Uri uri=data.getData();importing=true;importModel.setEnabled(false);hardwareButton.setEnabled(false);localModelStatus.setText("Імпорт GGUF…");android.content.Context app=getApplicationContext();importWorker=new Thread(()->{String failure=null;try{ModelImport.copy(app,uri);}catch(Exception e){failure=e.getMessage();}final String error=failure;runOnUiThread(()->{if(destroyed)return;importing=false;importModel.setEnabled(active==null);hardwareButton.setEnabled(active==null);if(error==null)refreshLocalModel();else localModelStatus.setText("Імпорт: "+error);});},"hatoriel-model-import");importWorker.start();}
+    @Override protected void onDestroy(){destroyed=true;if(transfer!=null)transfer.cancel();transfer=null;receivedTransfer=null;if(attachmentWorker!=null)attachmentWorker.interrupt();attachments.items.clear();if(voice!=null)voice.close();if(importWorker!=null)importWorker.interrupt();sessionHandler.removeCallbacks(sessionWatch);if(isFinishing()&&!GenerationSession.background)GenerationSession.cancel();super.onDestroy();}
 }

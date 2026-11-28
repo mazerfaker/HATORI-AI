@@ -1,6 +1,6 @@
 [package]
 name = "hatori_ai"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2021"
 [features]
 default = ["desktop"]
@@ -17,6 +17,7 @@ getrandom = "0.2"
 aes-gcm = "0.10"
 argon2 = "0.5"
 base64 = "0.22"
+sha2 = "0.10"
 zeroize = "1"
 eframe = { version = "0.29", optional = true }
 image = { version = "0.25", default-features = false, features = ["png","jpeg"], optional = true }

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 enum TransportFailure: LocalizedError {
     case invalidEndpoint, redirect, http(Int), tooLarge, incomplete, empty, server(String)
@@ -77,6 +78,45 @@ enum ChatTransport {
             throw CoreFailure.rejected("Несумісний шлюз Hatoriel.")
         }
         return info
+    }
+    static func receiveFile(base: String, key: String, code: String, progress: @escaping @MainActor (Int) -> Void) async throws -> (String, Data) {
+        try validateKey(key)
+        guard code.utf8.count == 32, code.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { throw CoreFailure.rejected("Некоректний одноразовий код") }
+        guard var c = URLComponents(url: try endpoint(base), resolvingAgainstBaseURL: false) else { throw TransportFailure.invalidEndpoint }
+        c.path = "/api/transfer"
+        guard let url = c.url else { throw TransportFailure.invalidEndpoint }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
+        request.setValue(code, forHTTPHeaderField: "X-Hatoriel-Transfer")
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 20; config.timeoutIntervalForResource = 120
+        config.httpShouldSetCookies = false; config.urlCache = nil; config.urlCredentialStorage = nil
+        let session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw TransportFailure.incomplete }
+        guard http.statusCode == 200 else { throw TransportFailure.http(http.statusCode) }
+        let size = http.expectedContentLength
+        guard size >= 0, size <= 8*1024*1024,
+              let hash = http.value(forHTTPHeaderField: "X-Hatoriel-SHA256"), hash.count == 64,
+              let encoded = http.value(forHTTPHeaderField: "X-Hatoriel-Name"), encoded.utf8.count <= 1024,
+              let decoded = Data(base64Encoded: encoded), let raw = String(data: decoded, encoding: .utf8) else { throw TransportFailure.tooLarge }
+        let clean = String(raw.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !"/\\:*?\"<>|".unicodeScalars.contains($0) }.prefix(160)).trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
+        var data = Data(), last = -1
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard Int64(data.count) < size else { throw TransportFailure.tooLarge }
+            data.append(byte)
+            let percent = size == 0 ? 100 : Int(Int64(data.count)*100/size)
+            if percent/5 != last { last = percent/5; await progress(percent) }
+        }
+        guard Int64(data.count) == size else { throw TransportFailure.incomplete }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard digest == hash else { throw CoreFailure.rejected("SHA-256 не збігається") }
+        try Task.checkCancellation(); await progress(100)
+        return (clean.isEmpty ? "attachment" : clean, data)
     }
     private struct Payload: Encodable {
         let model: String

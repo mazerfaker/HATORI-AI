@@ -296,6 +296,7 @@ struct FoundationView: View {
                         Text(chat.connectionStatus).font(.footnote)
                         Button("Перевірити збережене підключення") { Task { await chat.checkDesktop() } }.disabled(!chat.hasDesktopKey || chat.checkingConnection)
                         Button("Видалити ключ сеансу", role: .destructive) { chat.forgetDesktopKey(); sessionKey = "" }.disabled(chat.checkingConnection)
+                        FileTransferView(chat: chat)
                     }
                     Text("Лише HTTPS із довіреним сертифікатом. Повідомлення та частина історії надсилаються на вибраний сервер Ollama. Для локального режиму скористайся розділом «Локальний AI».")
                         .font(.footnote)
@@ -379,7 +380,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.7.2")
+                    Text("Crimson Core Minimal · 0.7.3")
                     Text("Rust Core " + coreVersion)
                 }
             }

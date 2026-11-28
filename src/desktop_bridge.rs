@@ -3,7 +3,7 @@ use tiny_http::{Server,Request,Response,Header,Method,StatusCode};
 use serde_json::{Value,json};
 const LIMIT:usize=256*1024;
 #[derive(Default)]
-pub struct Bridge{worker:Option<JoinHandle<()>>,stop:Option<Arc<AtomicBool>>,pub token:String}
+pub struct Bridge{worker:Option<JoinHandle<()>>,stop:Option<Arc<AtomicBool>>,pub token:String,pub transfers:crate::file_transfer::Store}
 impl Bridge{
  pub fn running(&self)->bool{self.worker.as_ref().is_some_and(|w|!w.is_finished())}
  pub fn start(&mut self,model:String)->Result<(),String>{
@@ -13,17 +13,17 @@ impl Bridge{
   let token=key.iter().map(|b|format!("{b:02x}")).collect::<String>();
   let server=Server::http("127.0.0.1:17845").map_err(|e|e.to_string())?;
   let client=reqwest::blocking::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(4)).timeout(Duration::from_secs(240)).build().map_err(|e|e.to_string())?;
-  let stop=Arc::new(AtomicBool::new(false));let flag=stop.clone();let secret=token.clone();
+  let stop=Arc::new(AtomicBool::new(false));let flag=stop.clone();let secret=token.clone();self.transfers.clear();let transfers=self.transfers.clone();
   self.worker=Some(thread::spawn(move||{
    while !flag.load(Ordering::Relaxed){
     match server.recv_timeout(Duration::from_millis(200)){
-     Ok(Some(req))=>handle(req,&client,&model,&secret,&flag),
+     Ok(Some(req))=>handle(req,&client,&model,&secret,&flag,&transfers),
      Ok(None)=>{},Err(_)=>break,
     }
    }
   }));self.stop=Some(stop);self.token=token;Ok(())
  }
- pub fn stop(&mut self){if let Some(s)=&self.stop{s.store(true,Ordering::Relaxed);}self.token.clear();}
+ pub fn stop(&mut self){if let Some(s)=&self.stop{s.store(true,Ordering::Relaxed);}self.token.clear();self.transfers.clear();}
 }
 impl Drop for Bridge{fn drop(&mut self){self.stop();}}
 fn status_payload(model:&str)->Value{json!({"service":"hatoriel-desktop","protocol":1,"model":model,"backend":"ollama"})}
@@ -34,7 +34,7 @@ impl Read for LimitedStream{fn read(&mut self,buf:&mut[u8])->std::io::Result<usi
  if self.stop.load(Ordering::Relaxed)||self.remaining==0{return Ok(0);}
  let cap=buf.len().min(self.remaining);let n=self.source.read(&mut buf[..cap])?;self.remaining-=n;Ok(n)
 }}
-fn handle(mut req:Request,client:&reqwest::blocking::Client,model:&str,secret:&str,stop:&Arc<AtomicBool>){
+fn handle(mut req:Request,client:&reqwest::blocking::Client,model:&str,secret:&str,stop:&Arc<AtomicBool>,transfers:&crate::file_transfer::Store){
  if stop.load(Ordering::Relaxed){reply(req,503,"Bridge stopped");return;}
  let expected=format!("Bearer {secret}");
  let authorized=req.headers().iter().any(|h|h.field.equiv("Authorization")&&same(h.value.as_str(),&expected));
@@ -43,6 +43,17 @@ fn handle(mut req:Request,client:&reqwest::blocking::Client,model:&str,secret:&s
   let header=Header::from_bytes(&b"Content-Type"[..],&b"application/json"[..]).expect("static header");
   let cache=Header::from_bytes(&b"Cache-Control"[..],&b"no-store"[..]).expect("static header");
   let _=req.respond(Response::from_string(status_payload(model).to_string()).with_header(header).with_header(cache));return;
+ }
+ if req.method()==&Method::Get&&req.url()=="/api/transfer"{
+  use base64::{Engine,engine::general_purpose::STANDARD};
+  let code=req.headers().iter().find(|h|h.field.equiv("X-Hatoriel-Transfer")).map(|h|h.value.as_str()).unwrap_or("");
+  if code.len()!=32||!code.bytes().all(|b|b.is_ascii_hexdigit()){reply(req,400,"Invalid transfer code");return;}
+  let Some(p)=transfers.take(code,std::time::Instant::now())else{reply(req,404,"Transfer unavailable or expired");return;};
+  if stop.load(Ordering::Relaxed){reply(req,503,"Bridge stopped");return;}
+  let headers=[("Content-Type","application/octet-stream".to_string()),("Cache-Control","no-store".into()),("X-Hatoriel-Name",STANDARD.encode(p.name.as_bytes())),("X-Hatoriel-SHA256",p.digest)];
+  let mut response=Response::from_data(p.bytes);
+  for (name,value) in headers{if let Ok(h)=Header::from_bytes(name.as_bytes(),value.as_bytes()){response=response.with_header(h);}}
+  let _=req.respond(response);return;
  }
  if req.method()!=&Method::Post||req.url()!="/api/chat"{reply(req,404,"Unsupported endpoint");return;}
  let Some(len)=req.body_length() else{reply(req,411,"Content-Length required");return;};
