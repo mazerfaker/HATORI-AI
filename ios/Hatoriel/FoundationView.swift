@@ -405,6 +405,7 @@ struct FoundationView: View {
                         }
                     }
                     Toggle("Адаптивний стиль", isOn: $personality.dynamic_style)
+                    Text("Враховує тип запиту, короткі продовження та погоджені уподобання. Базові риси не змінюються.").font(.footnote)
                     Toggle("Симуляція емоцій", isOn: $personality.emotion_enabled)
                     if personality.emotion_enabled {
                         LabeledContent("Останній стан", value: moodLabels[personality.mood.mood] ?? "Спокій")
@@ -429,7 +430,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.8.2")
+                    Text("Crimson Core Minimal · 0.8.3")
                     Text("Rust Core " + coreVersion)
                 }
             }

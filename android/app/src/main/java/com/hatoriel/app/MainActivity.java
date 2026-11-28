@@ -190,7 +190,7 @@ public final class MainActivity extends Activity {
             android.widget.CheckBox emotional=new android.widget.CheckBox(this);emotional.setText("Симуляція емоцій");emotional.setChecked(opts.optBoolean("emotion_enabled",false));panel.addView(emotional);
             JSONObject mood=opts.optJSONObject("mood");if(mood!=null&&opts.optBoolean("emotion_enabled",false))panel.addView(label("Останній збережений тон: "+mood.optString("mood","Calm")+" · "+mood.optInt("intensity",0)+"/100 (умовний стан)",12));
             Button reset=new Button(this);reset.setText("Відновити базові риси");panel.addView(reset);reset.setOnClickListener(v->{for(int i=0;i<7;i++)bars[i].setProgress(defaults[i]);});
-            panel.addView(label("Риси визначають тон відповіді, а не права доступу. Це симуляція характеру; налаштування використовуються у контексті вибраної моделі.",12));
+            panel.addView(label("Риси визначають тон, а не права доступу. Адаптивний стиль враховує тип завдання, короткі продовження і дозволені уподобання без зміни базових рис. Налаштування використовуються у контексті вибраної моделі.",12));
             ScrollView scroll=new ScrollView(this);scroll.addView(panel);
             new AlertDialog.Builder(this).setTitle("Personality Engine 2.0").setView(scroll).setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{
                 if(GenerationSession.active!=null)return;

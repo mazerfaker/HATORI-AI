@@ -23,7 +23,7 @@ final class CrimsonAvatar extends View {
     private long transitionStart;
     private boolean canAnimate(){return motion&&android.animation.ValueAnimator.areAnimatorsEnabled();}
     private void sample(long now){float u=canAnimate()?Math.max(0f,Math.min(1f,(now-transitionStart)/350f)):1f;u=u*u*(3f-2f*u);for(int i=0;i<4;i++)expression[i]=from[i]+(target[i]-from[i])*u;}
-    void setMood(String mood,int intensity){int index=switch(mood){case "Joy"->0;case "Concern"->1;case "Surprise"->2;case "Curiosity"->3;default->-1;};float strength=Math.max(0,Math.min(100,intensity))/100f;boolean changed=false;for(int i=0;i<4;i++)if(target[i]!=(i==index?strength:0f))changed=true;if(!changed)return;long now=SystemClock.elapsedRealtime();sample(now);for(int i=0;i<4;i++){from[i]=expression[i];target[i]=i==index?strength:0f;}transitionStart=now;invalidate();}
+    void setMood(String mood,int intensity){int index;switch(mood){case "Joy":index=0;break;case "Concern":index=1;break;case "Surprise":index=2;break;case "Curiosity":index=3;break;default:index=-1;}float strength=Math.max(0,Math.min(100,intensity))/100f;boolean changed=false;for(int i=0;i<4;i++)if(target[i]!=(i==index?strength:0f))changed=true;if(!changed)return;long now=SystemClock.elapsedRealtime();sample(now);for(int i=0;i<4;i++){from[i]=expression[i];target[i]=i==index?strength:0f;}transitionStart=now;invalidate();}
     CrimsonAvatar(Context context){super(context);setContentDescription("Hatoriel · "+state.label);}
     void setMotion(boolean enabled){if(motion!=enabled){motion=enabled;invalidate();}}
     void setState(State next){if(state!=next){state=next;setContentDescription("Hatoriel · "+state.label);invalidate();}}
