@@ -5,9 +5,9 @@ use rusqlite::{Connection,params};
 const TTL:Duration=Duration::from_secs(60);
 const MAX_AUDIT:usize=200;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText,Search,OfferFile,RegisterApp,LaunchApp}
+enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText,Search,OfferFile,RegisterApp,LaunchApp,CaptureScreen}
 impl Action{
- fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data",Self::GrantFolder=>"grant_folder",Self::ListFolder=>"list_folder",Self::ReadText=>"read_text",Self::Search=>"search_files",Self::OfferFile=>"offer_file",Self::RegisterApp=>"register_app",Self::LaunchApp=>"launch_app"}}
+ fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data",Self::GrantFolder=>"grant_folder",Self::ListFolder=>"list_folder",Self::ReadText=>"read_text",Self::Search=>"search_files",Self::OfferFile=>"offer_file",Self::RegisterApp=>"register_app",Self::LaunchApp=>"launch_app",Self::CaptureScreen=>"capture_screen"}}
  fn label(self,en:bool)->&'static str{match (self,en){
   (Self::InspectStatus,true)=>"Inspect local application status",
   (Self::InspectStatus,false)=>"Переглянути локальний стан застосунку",
@@ -20,6 +20,7 @@ impl Action{
   (Self::OfferFile,true)=>"Prepare original file for phone",(Self::OfferFile,false)=>"Підготувати оригінал для смартфона",
   (Self::RegisterApp,true)=>"Approve executable for this session",(Self::RegisterApp,false)=>"Дозволити програму на цей сеанс",
   (Self::LaunchApp,true)=>"Launch approved application",(Self::LaunchApp,false)=>"Запустити дозволену програму",
+  (Self::CaptureScreen,true)=>"Capture primary monitor",(Self::CaptureScreen,false)=>"Зробити знімок основного монітора",
  }}
 }
 #[derive(Clone,Debug)]
@@ -33,7 +34,7 @@ impl Gate{
  fn propose(&mut self,action:Action,target:Option<PathBuf>,now:Instant)->Result<(),String>{
   if !self.enabled{return Err("Computer interaction disabled".into());}
   if self.pending.is_some(){return Err("Resolve the existing proposal first".into());}
-  if (action!=Action::InspectStatus)!=target.is_some(){return Err("Invalid action target".into());}
+  if (!matches!(action,Action::InspectStatus|Action::CaptureScreen))!=target.is_some(){return Err("Invalid action target".into());}
   self.pending=Some(Proposal{action,target,created:now});Ok(())
  }
  fn approve(&mut self,now:Instant)->Result<Proposal,String>{
@@ -88,9 +89,9 @@ struct SearchJob{
  rx:std::sync::mpsc::Receiver<Result<crate::file_search::Report,String>>,
 }
 #[derive(Default)]
-pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>,filter:crate::file_search::Filter,search_pending:Option<crate::file_search::Filter>,search_job:Option<SearchJob>,search_report:Option<crate::file_search::Report>,apps:crate::app_control::Catalog}
+pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>,filter:crate::file_search::Filter,search_pending:Option<crate::file_search::Filter>,search_job:Option<SearchJob>,search_report:Option<crate::file_search::Report>,apps:crate::app_control::Catalog,screen:Option<crate::screen_awareness::Snapshot>,screen_attach:bool}
 impl Computer{
- pub fn leave(&mut self){self.gate.cancel();self.preview=None;self.search_pending=None;self.cancel_search();}
+ pub fn leave(&mut self){self.screen=None;self.screen_attach=false;self.gate.cancel();self.preview=None;self.search_pending=None;self.cancel_search();}
  fn cancel_search(&mut self){if let Some(j)=&self.search_job{j.cancel.store(true,std::sync::atomic::Ordering::Relaxed);}self.search_report=None;}
  pub fn poll(&mut self,db:Option<&Connection>){
   self.apps.poll();
@@ -106,7 +107,9 @@ impl Computer{
   std::thread::Builder::new().name("hatoriel-file-search".into()).spawn(move||{let result=std::panic::catch_unwind(||crate::file_search::search(&scopes,&root,&filter,&flag)).unwrap_or_else(|_|Err("Search worker failed".into()));let _=tx.send(result);}).map_err(|e|e.to_string())?;
   self.search_report=None;self.search_job=Some(SearchJob{id,cancel,rx});Ok(())
  }
- fn clear_view(&mut self){self.current=None;self.entries.clear();self.preview=None;self.search_pending=None;self.cancel_search();}
+ pub fn screen_for_chat(&mut self)->Option<Vec<u8>>{if !std::mem::take(&mut self.screen_attach){return None;}self.screen.as_ref().map(|s|s.bytes.clone())}
+ pub fn screen_feedback(&mut self,message:String){self.status=message;}
+ fn clear_view(&mut self){self.screen=None;self.screen_attach=false;self.current=None;self.entries.clear();self.preview=None;self.search_pending=None;self.cancel_search();}
  fn request(&mut self,action:Action,target:PathBuf){match self.gate.propose(action,Some(target),Instant::now()){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}}
  pub fn panel(&mut self,ui:&mut egui::Ui,db:Option<&Connection>,busy:bool,en:bool,backend:&str,model:&str,bridge:bool,transfers:&crate::file_transfer::Store){
   self.gate.expire(Instant::now());
@@ -114,15 +117,30 @@ impl Computer{
   ui.label(if en{"Local, manual requests only. No AI-generated commands, remote requests or file modifications. Only explicitly granted folders."}else{"Лише локальні ручні запити. Без команд від ШІ, віддалених дій або зміни файлів. Лише дозволені папки."});
   let mut enabled=self.gate.enabled;
   if ui.checkbox(&mut enabled,if en{"Enable actions for this session"}else{"Дозволити дії в поточному сеансі"}).changed(){self.gate.enable(enabled);if !enabled{transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}self.status=if enabled{"Session permission granted / Дозвіл надано".into()}else{"Permission revoked / Дозвіл відкликано".into()};}
-  if busy{self.gate.cancel();self.search_pending=None;self.cancel_search();}
+  if busy{self.screen=None;self.screen_attach=false;self.gate.cancel();self.search_pending=None;self.cancel_search();}
   if !bridge||!self.gate.enabled{transfers.clear();}
-  if db.is_none(){transfers.clear();ui.label("Action journal unavailable. Execution blocked / Журнал недоступний. Дії заблоковані.");self.gate.cancel();}
+  if db.is_none(){self.screen=None;self.screen_attach=false;transfers.clear();ui.label("Action journal unavailable. Execution blocked / Журнал недоступний. Дії заблоковані.");self.gate.cancel();}
   let can=self.gate.enabled&&!busy&&db.is_some()&&self.gate.pending.is_none()&&self.search_job.is_none();
   for action in [Action::InspectStatus,Action::OpenData]{
    if ui.add_enabled(can&&(action!=Action::OpenData||cfg!(windows)),egui::Button::new(action.label(en))).clicked(){
     let target=match action{Action::InspectStatus=>Ok(None),Action::OpenData=>local_data().map(Some),_=>Err("Invalid quick action".into())};
     match target.and_then(|t|self.gate.propose(action,t,Instant::now())){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}
    }
+  }
+  ui.separator();ui.heading("Screen awareness / Аналіз екрана");
+  ui.small("One screenshot of the primary monitor, including Hatoriel and any visible private content. No background capture. Review before adding to chat.");
+  if ui.add_enabled(can&&cfg!(windows),egui::Button::new("Capture screen / Знімок екрана")).clicked(){
+   match self.gate.propose(Action::CaptureScreen,None,Instant::now()){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}
+  }
+  if let Some(screen)=&self.screen{
+   ui.label(format!("{} × {} source · JPEG {} KiB · RAM only",screen.source_size[0],screen.source_size[1],screen.bytes.len()/1024));
+   ui.add(egui::Image::new(&screen.texture).max_size(egui::vec2(ui.available_width().min(760.),380.)));
+   ui.collapsing("Inspect captured pixels / Детальний перегляд",|ui|{egui::ScrollArea::both().id_salt("screen-detail").max_height(380.).show(ui,|ui|{ui.add(egui::Image::new(&screen.texture));});});
+   ui.horizontal(|ui|{
+    if ui.add_enabled(can&&backend=="Ollama",egui::Button::new("Add to chat draft / Додати в чат")).clicked(){self.screen_attach=true;}
+    if ui.button("Discard / Видалити").clicked(){self.screen=None;self.screen_attach=false;}
+   });
+   ui.small("Nothing is sent until you enter a question and confirm Vision in chat. / Надсилання лише після підтвердження в чаті.");
   }
   ui.separator();ui.heading("Application control / Керування програмами");
   ui.small("Trusted EXE only, no arguments or shell. Approval is session-only. Programs run with your account's permissions; revoke does not close existing processes.");
@@ -204,6 +222,7 @@ impl Computer{
    ui.separator();ui.label(egui::RichText::new("REVIEW / ПІДТВЕРДЖЕННЯ").color(crate::crimson::RED).strong());
    ui.label(p.action.label(en));
    if let Some(path)=&p.target{ui.label(path.display().to_string());ui.small(match p.action{Action::OpenData=>"Opens Explorer, no content read.",Action::GrantFolder=>"Grants read-only access for this session, not automatic scanning.",Action::ListFolder=>"Lists at most 200 immediate entries, no recursion.",Action::ReadText=>"Reads at most 64 KiB of supported plain text, displayed locally.",Action::Search=>"Recursive scan: up to 4000 entries, 200 results, 64 text reads, cooperative 5s limit. No upload.",Action::OfferFile=>"Creates a memory-only copy of the original file for one authenticated HTTPS download within 120 seconds. Not bound to one device; protect both codes.",Action::RegisterApp=>"Trust this specific executable for this session. Its SHA-256 will be recorded in memory; only choose software you trust.",Action::LaunchApp=>"Launch this executable without arguments. It runs with your user permissions and can act independently. No sandbox or elevation request.",_=>""});}
+   else if p.action==Action::CaptureScreen{ui.small("Capture the current visible primary monitor now, including sensitive windows. Close private content first. No file write or model request.");}
    else{ui.small("Displays current backend, selected model, app storage mode and bridge state. / Лише стан застосунку.");}
    if p.action==Action::Search{if let Some(f)=&self.search_pending{ui.label(format!("Name: {:?} · Extension: {:?} · Content: {:?} · size {}–{} KiB (0 max = any) · recent {} days",f.name,f.extension,f.content,f.min_kib,f.max_kib,f.recent_days));}}
    ui.small(format!("{} s · one-time approval",TTL.saturating_sub(p.created.elapsed()).as_secs()));
@@ -225,6 +244,7 @@ impl Computer{
         }
         let result=match p.action{
          Action::Search=>Err("Search dispatch error".into()),
+         Action::CaptureScreen=>{self.screen=None;self.screen_attach=false;crate::screen_awareness::capture(ui.ctx()).map(|shot|{self.screen=Some(shot);"Screenshot captured locally / Знімок готовий до перегляду".into()})},
          Action::RegisterApp=>p.target.as_deref().ok_or_else(||"Missing executable".to_string()).and_then(|path|self.apps.register(path)).map(|_|"Executable approved for this session / Програму дозволено".into()),
          Action::LaunchApp=>p.target.as_deref().ok_or_else(||"Missing executable".to_string()).and_then(|path|self.apps.launch(path)).map(|pid|format!("Launch requested · PID {pid} / Запуск запитано")),
          Action::OfferFile=>if !bridge{Err("Bridge stopped".into())}else{p.target.as_deref().ok_or_else(||"Missing file".to_string()).and_then(|path|transfers.prepare(&self.scopes,path)).map(|_|"File prepared; enter one-time code on phone / Файл підготовлено".into())},
@@ -236,8 +256,8 @@ impl Computer{
         };
         let outcome=if result.is_ok(){if matches!(p.action,Action::OpenData|Action::LaunchApp){"launch_requested"}else if p.action==Action::OfferFile{"offer_created"}else{"completed"}}else{"failed"};
         self.status=match result{Ok(s)=>s,Err(e)=>format!("Action failed: {e}")};
-        if finish(db,id,outcome).is_err(){self.status.push_str("\nAudit completion write failed; initial approval remains recorded.");self.gate.enable(false);transfers.clear();self.scopes.clear();self.clear_view();}
-       },Err(e)=>{self.status=format!("Action blocked: audit write failed: {e}");transfers.clear();self.gate.enable(false);self.scopes.clear();self.clear_view();}
+        if finish(db,id,outcome).is_err(){self.status.push_str("\nAudit completion write failed; initial approval remains recorded.");self.gate.enable(false);transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}
+       },Err(e)=>{self.status=format!("Action blocked: audit write failed: {e}");transfers.clear();self.gate.enable(false);self.scopes.clear();self.apps.clear();self.clear_view();}
       }
      },
      Err(e)=>self.status=e,
@@ -262,6 +282,7 @@ impl Computer{
  use super::*;
  #[test]fn permission_one_shot(){let now=Instant::now();let mut g=Gate::default();assert!(g.propose(Action::InspectStatus,None,now).is_err());g.enable(true);g.propose(Action::InspectStatus,None,now).unwrap();assert!(g.propose(Action::InspectStatus,None,now).is_err());assert_eq!(g.approve(now).unwrap().action,Action::InspectStatus);assert!(g.approve(now).is_err());}
  #[test]fn expiry_revocation_and_target(){let now=Instant::now();let mut g=Gate::default();g.enable(true);assert!(g.propose(Action::OpenData,None,now).is_err());g.propose(Action::OpenData,Some(PathBuf::from("approved")),now).unwrap();assert!(g.approve(now+TTL).is_err());g.propose(Action::InspectStatus,None,now).unwrap();g.enable(false);assert!(g.approve(now).is_err());}
+ #[test]fn screen_confirmation_is_one_shot(){let now=Instant::now();let mut g=Gate::default();assert!(g.propose(Action::CaptureScreen,None,now).is_err());g.enable(true);assert!(g.propose(Action::CaptureScreen,Some(PathBuf::from("invalid")),now).is_err());g.propose(Action::CaptureScreen,None,now).unwrap();assert_eq!(g.approve(now).unwrap().action,Action::CaptureScreen);assert!(g.approve(now).is_err());}
  #[test]fn journal_bounds(){let db=Connection::open_in_memory().unwrap();for _ in 0..MAX_AUDIT+3{let id=begin(&db,Action::InspectStatus).unwrap();finish(&db,id,"completed").unwrap();}let count:i64=db.query_row("SELECT COUNT(*) FROM computer_audit",[],|r|r.get(0)).unwrap();assert_eq!(count,MAX_AUDIT as i64);let rows=recent(&db).unwrap();assert_eq!(rows.len(),30);assert_eq!(rows[0].1,"inspect_status");assert_eq!(rows[0].2,"completed");}
  #[test]fn audit_fail_closed(){let db=Connection::open_in_memory().unwrap();db.execute_batch("CREATE TABLE computer_audit(wrong INTEGER);").unwrap();assert!(begin(&db,Action::InspectStatus).is_err());}
 }

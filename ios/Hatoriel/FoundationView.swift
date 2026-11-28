@@ -380,7 +380,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.7.4")
+                    Text("Crimson Core Minimal · 0.7.5")
                     Text("Rust Core " + coreVersion)
                 }
             }
