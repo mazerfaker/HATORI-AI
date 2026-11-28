@@ -39,6 +39,16 @@ final class MobileMemory {
         JSONObject opts=new JSONObject().put("mode",mode).put("traits",values).put("dynamic_style",dynamic).put("emotion_enabled",emotional).put("mood",new JSONObject());
         if(!prefs.edit().putString("sync_options",opts.toString()).commit())throw new IllegalStateException("Не вдалося зберегти особистість");
     }
+    void resetMood(){
+        try{JSONObject opts=options();opts.put("mood",new JSONObject());prefs.edit().putString("sync_options",opts.toString()).apply();}catch(JSONException ignored){}
+    }
+    void saveMood(JSONObject mood)throws JSONException{
+        JSONObject opts=options();if(!opts.optBoolean("emotion_enabled",false))return;
+        if(!java.util.Arrays.asList("Calm","Joy","Concern","Surprise","Curiosity").contains(mood.optString("mood")))throw new IllegalArgumentException("Invalid mood");
+        JSONObject safe=new JSONObject().put("mood",mood.optString("mood")).put("intensity",Math.max(0,Math.min(100,mood.optInt("intensity")))).put("updated",Math.max(0,mood.optLong("updated")));
+        opts.put("mood",safe);
+        if(!prefs.edit().putString("sync_options",opts.toString()).commit())throw new IllegalStateException("Не вдалося зберегти стан");
+    }
     JSONObject snapshot()throws JSONException{
         return new JSONObject().put("version",1).put("records",new JSONArray(prefs.getString("approved_memories","[]"))).put("profile",new JSONObject(prefs.getString("memory_profile","{}"))).put("options",options());
     }

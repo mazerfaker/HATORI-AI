@@ -362,7 +362,7 @@ struct FoundationView: View {
                         LabeledContent("Останній стан", value: moodLabels[personality.mood.mood] ?? "Спокій")
                         ProgressView(value: Double(personality.mood.intensity), total: 100)
                         Button("Скинути стан") { personality.mood = CoreMood() }
-                        Text("Моделювання тону відповіді за правилами, а не справжні почуття. Стан уточнюється при наступному запиті.").font(.footnote)
+                        Text("Локальні мовні підказки та плавне згасання стану. Це не діагноз і не справжні почуття. Відображено останній збережений стан.").font(.footnote)
                     }
                     if chat.effectiveTraits.count == 7 {
                         DisclosureGroup("Ефективні риси останнього контексту") {
@@ -381,7 +381,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.8.0")
+                    Text("Crimson Core Minimal · 0.8.1")
                     Text("Rust Core " + coreVersion)
                 }
             }

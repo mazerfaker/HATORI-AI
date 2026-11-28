@@ -22,18 +22,20 @@ final class GenerationSession {
         final Runnable deadline=()->{if(active==transport){status="Ліміт часу генерації";transport.cancel();revision++;}};
         MAIN.postDelayed(deadline,300000);
         new Thread(()->{
-            String reply=null,error=null;
+            String reply=null,error=null;JSONObject nextMood=null;
             try{
-                String prepared=NativeCore.prepareMemory(data);
-                if(prepared==null||!prepared.startsWith("["))throw new IllegalStateException("Core: "+prepared);
+                String prepared=NativeCore.prepareContext(data);
+                if(prepared==null)throw new IllegalStateException("Core unavailable");
+                JSONObject output=new JSONObject(prepared);if(output.has("error"))throw new IllegalStateException(output.getString("error"));
+                nextMood=output.getJSONObject("mood");
                 long[] last={0};
-                reply=transport.request(server,model,new JSONArray(prepared),sessionKey,text->{
+                reply=transport.request(server,model,output.getJSONArray("messages"),sessionKey,text->{
                     long now=SystemClock.elapsedRealtime();
                     if(now-last[0]<100)return;last[0]=now;
                     MAIN.post(()->{if(active==transport&&!transport.isCancelled()){partial=text;revision++;}});
                 });
             }catch(Exception|LinkageError e){error=e.getMessage()==null?e.toString():e.getMessage();}
-            final String result=reply,failure=error;
+            final String result=reply,failure=error;final JSONObject mood=nextMood;
             MAIN.post(()->{
                 MAIN.removeCallbacks(deadline);
                 if(active!=transport||job!=id)return;
@@ -46,6 +48,7 @@ final class GenerationSession {
                     rows.put(new JSONObject().put("role","assistant").put("content",result));
                     while(rows.length()>100)rows.remove(0);
                     if(!prefs.edit().putString("history",rows.toString()).commit())throw new IllegalStateException("Не вдалося зберегти відповідь");
+                    if(mood!=null){try{new MobileMemory(prefs).saveMood(mood);}catch(Exception ignored){}}
                     status="Готово";
                 }catch(Exception e){status="Помилка збереження: "+e.getMessage();}
                 active=null;background=false;partial="";revision++;

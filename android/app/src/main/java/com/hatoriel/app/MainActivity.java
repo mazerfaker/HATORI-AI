@@ -121,7 +121,7 @@ public final class MainActivity extends Activity {
         CheckBox englishVoice=new CheckBox(this);englishVoice.setText("English voice / dictation");englishVoice.setChecked(prefs.getBoolean("voice_english",false));settings.addView(englishVoice);englishVoice.setOnCheckedChangeListener((b,value)->prefs.edit().putBoolean("voice_english",value).apply());
         settings.addView(label("Диктування відкриває системний сервіс Android, який може використовувати мережу. Озвучування обирає встановлений локальний голос.",12));
         clear=new Button(this);clear.setText("Очистити історію");settings.addView(clear);
-        clear.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну історію?").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(GenerationSession.active==null){history=new JSONArray();prefs.edit().remove("history").apply();render();busy(false);}}).show());
+        clear.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити локальну історію?").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{if(GenerationSession.active==null){history=new JSONArray();prefs.edit().remove("history").apply();memory.resetMood();render();busy(false);}}).show());
         scroll=new ScrollView(this);messages=new LinearLayout(this);messages.setOrientation(LinearLayout.VERTICAL);scroll.addView(messages);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         composer=new LinearLayout(this);composer.setOrientation(LinearLayout.VERTICAL);root.addView(composer);input=new EditText(this);input.setHint("Напиши повідомлення…");input.setMinLines(1);input.setMaxLines(4);composer.addView(input);
         attachButton=new Button(this);attachButton.setText("＋ Файл");composer.addView(attachButton);attachButton.setOnClickListener(v->pickAttachment());
@@ -178,6 +178,7 @@ public final class MainActivity extends Activity {
             }
             android.widget.CheckBox dynamic=new android.widget.CheckBox(this);dynamic.setText("Адаптивний стиль");dynamic.setChecked(opts.optBoolean("dynamic_style",true));panel.addView(dynamic);
             android.widget.CheckBox emotional=new android.widget.CheckBox(this);emotional.setText("Симуляція емоцій");emotional.setChecked(opts.optBoolean("emotion_enabled",false));panel.addView(emotional);
+            JSONObject mood=opts.optJSONObject("mood");if(mood!=null&&opts.optBoolean("emotion_enabled",false))panel.addView(label("Останній збережений тон: "+mood.optString("mood","Calm")+" · "+mood.optInt("intensity",0)+"/100 (умовний стан)",12));
             Button reset=new Button(this);reset.setText("Відновити базові риси");panel.addView(reset);reset.setOnClickListener(v->{for(int i=0;i<7;i++)bars[i].setProgress(defaults[i]);});
             panel.addView(label("Риси визначають тон відповіді, а не права доступу. Це симуляція характеру; налаштування використовуються у контексті вибраної моделі.",12));
             ScrollView scroll=new ScrollView(this);scroll.addView(panel);

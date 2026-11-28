@@ -45,6 +45,16 @@ pub extern "system" fn Java_com_hatoriel_app_NativeCore_prepareMemory(mut env:JN
  env.new_string(value).map(|s|s.into_raw()).unwrap_or(null_mut())
 }
 #[no_mangle]
+pub extern "system" fn Java_com_hatoriel_app_NativeCore_prepareContext(mut env:JNIEnv,_class:JClass,input:JString)->jstring{
+ let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<String,String>{
+ let json:String=env.get_string(&input).map_err(|e|e.to_string())?.into();
+ let output=hatori_ai::mobile_context::prepare_json(json.as_bytes(),hatori_ai::emotion::now())?;
+ serde_json::to_string(&output).map_err(|e|e.to_string())
+ }));
+ let value=match result{Ok(Ok(s))=>s,Ok(Err(e))=>serde_json::json!({"error":e}).to_string(),Err(_)=>serde_json::json!({"error":"Native core failure"}).to_string()};
+ env.new_string(value).map(|s|s.into_raw()).unwrap_or(null_mut())
+}
+#[no_mangle]
 pub extern "system" fn Java_com_hatoriel_app_NativeCore_suggestMemory(mut env:JNIEnv,_class:JClass,input:JString)->jstring{
  let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<String,String>{let query:String=env.get_string(&input).map_err(|e|e.to_string())?.into();Ok(match hatori_ai::memory_suggest::suggest(&query){Some(m)=>serde_json::json!({"content":m.content,"category":m.category,"importance":m.importance}).to_string(),None=>"null".into()})}));
  let value=match result{Ok(Ok(s))=>s,_=>"null".into()};env.new_string(value).map(|s|s.into_raw()).unwrap_or(null_mut())

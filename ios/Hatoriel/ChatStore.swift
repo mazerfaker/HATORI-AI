@@ -246,6 +246,7 @@ struct ChatEntry: Codable, Identifiable {
         guard !busy else { return }
         history = []
         defaults.removeObject(forKey: "chat.history")
+        persistMood(CoreMood(), effective: options.traits)
         status = "Історію очищено"
     }
     func cancel() {
