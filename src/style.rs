@@ -31,9 +31,8 @@ pub fn plan(base:[u8;7],query:&str,mood:Option<&State>,mode:&str,profile:&Profil
  let mut t=base.map(|v|v.min(100));let w=words(query,12000);let prefs=words(&profile.communication,1000);
  let mut kind=task(&w);let mut inherited=false;
  if kind==Task::General&&continuation(&w){
-  for m in history.iter().rev().filter(|m|m.role=="user").skip(1).take(3){
-   let candidate=task(&words(&m.content,12000));if candidate!=Task::General{kind=candidate;inherited=true;break;}
-  }
+  let previous=crate::memory_core::continuation_query(query,history);
+  let candidate=task(&words(&previous,12000));if candidate!=Task::General{kind=candidate;inherited=true;}
  }
  let serious=crate::emotion::classify(query).serious||kind==Task::Support||matches!(mood.map(|m|m.mood),Some(Mood::Concern));
  let no_humor=has(&w,&["без гумору","без сарказму","без жартів","no humor","no sarcasm","no jokes","без шуток"]);
@@ -41,7 +40,7 @@ pub fn plan(base:[u8;7],query:&str,mood:Option<&State>,mode:&str,profile:&Profil
  let pref_no_humor=has(&prefs,&["без гумору","без сарказму","без жартів","no humor","no sarcasm","no jokes","без шуток"]);
  if kind==Task::Technical||kind==Task::Research||mode=="Developer"||mode=="Researcher"{t[0]=t[0].max(85);t[6]=t[6].min(25);t[3]=t[3].min(45);}
  if kind==Task::Support{t[1]=t[1].max(80);t[4]=t[4].min(45);}
- if serious||no_humor{t[3]=t[3].min(15);t[6]=0;if serious{t[1]=t[1].max(80);}}
+ if serious||no_humor{t[3]=if no_humor{0}else{t[3].min(15)};t[6]=0;if serious{t[1]=t[1].max(80);}}
  else if playful&&kind!=Task::Technical&&kind!=Task::Research{t[3]=t[3].saturating_add(10).min(100);}
  else if pref_no_humor{t[3]=0;t[6]=0;}
  let explicit=lengths(&w);let choice=if explicit==(false,false){lengths(&prefs)}else{explicit};
@@ -59,3 +58,9 @@ pub fn effective(base:[u8;7],query:&str,mood:Option<&State>,mode:&str)->([u8;7],
  #[test]fn serious_precedes_playful(){let p=plan([90;7],"мені сумно, пожартуй",None,"Companion",&Profile::default(),&[]);assert_eq!(p.task,Task::Support);assert_eq!(p.traits[6],0);}
  #[test]fn other_profile_fields_do_not_control_style(){let p=Profile{goals:"коротко".into(),interests:"без жартів".into(),..Default::default()};let a=plan([90;7],"hello",None,"Companion",&p,&[]);assert_eq!(a.traits,[90;7]);assert_eq!(a.length,"Match the complexity of the request");}
 }
+
+#[cfg(test)]#[test]fn latest_topic_only(){
+ let h=vec![Message{role:"user".into(),content:"Rust build".into()},Message{role:"user".into(),content:"привіт".into()},Message{role:"user".into(),content:"далі".into()}];
+ assert_eq!(plan([50;7],"далі",None,"Companion",&Profile::default(),&h).task,Task::General);
+}
+#[cfg(test)]#[test]fn explicit_no_humor(){let p=plan([90;7],"без жартів",None,"Companion",&Profile::default(),&[]);assert_eq!(p.traits[3],0);assert_eq!(p.traits[6],0);}

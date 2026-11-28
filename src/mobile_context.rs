@@ -30,7 +30,7 @@ pub fn prepare(mut input:Input,now:u64)->Result<Output,String>{
  let mut mood=input.options.mood;
  mood.intensity=mood.intensity.min(100);
  mood.updated=mood.updated.min(now);
- if input.options.emotion_enabled{mood.observe(&query,now,traits[5]);}else{mood=Default::default();}
+ if input.options.emotion_enabled{mood.observe(&query,now,traits[5]);if input.options.dynamic_style{let task=style::plan(traits,&query,Some(&mood),&input.options.mode,&input.profile,&input.history).task;emotion::align(&mut mood,task,&query);}}else{mood=Default::default();}
  let context_mood=input.options.emotion_enabled.then(||mood.clone());
  for field in [&mut input.profile.interests,&mut input.profile.communication,&mut input.profile.goals]{*field=field.chars().take(1000).collect();}
  let memories:Vec<_>=input.memories.into_iter().filter(|m|!m.content.trim().is_empty()&&m.content.chars().count()<=500).map(|m|(m.content,m.importance.min(100),m.id)).collect();

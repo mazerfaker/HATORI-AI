@@ -25,3 +25,5 @@ pub mod sync;
 pub mod vision;
 
 pub mod multimodal;
+
+pub mod communication;

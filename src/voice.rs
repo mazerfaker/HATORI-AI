@@ -15,18 +15,22 @@ impl Voice {
   #[cfg(windows)] if let Some(mut child)=self.child.take(){let _=child.kill();let _=child.wait();}
  }
  pub fn speak(&mut self,text:&str,english:bool,settings:&crate::neural_voice::Settings)->Result<(),String>{
+  self.speak_paced(text,english,settings,1.0)
+ }
+ pub fn speak_paced(&mut self,text:&str,english:bool,settings:&crate::neural_voice::Settings,factor:f32)->Result<(),String>{
   self.stop();
-  if settings.enabled{return self.neural.start(text,settings);}
+  let factor=if factor.is_finite(){factor.clamp(0.85,1.15)}else{1.};
+  if settings.enabled{let mut adjusted=settings.clone();adjusted.speed*=factor;return self.neural.start(text,&adjusted);}
   #[cfg(windows)] {
    use std::{io::Write,process::{Command,Stdio},os::windows::process::CommandExt};
    let text:String=text.chars().take(4000).collect();
    if text.trim().is_empty(){return Err("No text to speak".into());}
    let root=std::env::var_os("SystemRoot").ok_or("Windows directory unavailable")?;
    let exe=std::path::PathBuf::from(root).join("System32/WindowsPowerShell/v1.0/powershell.exe");
-   let script=r#"$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Speech; $s=New-Object System.Speech.Synthesis.SpeechSynthesizer; try { $culture=if($env:HATORIEL_SPEECH_LANG -eq 'en-US'){'en-US'}else{'uk-UA'}; $s.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet,[System.Speech.Synthesis.VoiceAge]::NotSet,0,[System.Globalization.CultureInfo]::GetCultureInfo($culture)); $s.Speak([Console]::In.ReadToEnd()) } finally { $s.Dispose() }"#;
+   let script=r#"$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Speech; $s=New-Object System.Speech.Synthesis.SpeechSynthesizer; try { $culture=if($env:HATORIEL_SPEECH_LANG -eq 'en-US'){'en-US'}else{'uk-UA'}; $s.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet,[System.Speech.Synthesis.VoiceAge]::NotSet,0,[System.Globalization.CultureInfo]::GetCultureInfo($culture)); $s.Rate=[int]$env:HATORIEL_SPEECH_RATE; $s.Speak([Console]::In.ReadToEnd()) } finally { $s.Dispose() }"#;
    // The message is supplied as UTF-8 stdin, never interpolated into the command.
    let script=format!("[Console]::InputEncoding=[System.Text.Encoding]::UTF8; {script}");
-   let mut child=Command::new(exe).args(["-NoProfile","-NonInteractive","-Command",&script]).env("HATORIEL_SPEECH_LANG",if english{"en-US"}else{"uk-UA"}).creation_flags(0x08000000).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e|e.to_string())?;
+   let mut child=Command::new(exe).args(["-NoProfile","-NonInteractive","-Command",&script]).env("HATORIEL_SPEECH_LANG",if english{"en-US"}else{"uk-UA"}).env("HATORIEL_SPEECH_RATE",((factor-1.)*12.).round().clamp(-2.,2.).to_string()).creation_flags(0x08000000).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e|e.to_string())?;
    if let Some(mut stdin)=child.stdin.take(){std::thread::spawn(move||{let _=stdin.write_all(text.as_bytes());});}
    self.child=Some(child);Ok(())
   }

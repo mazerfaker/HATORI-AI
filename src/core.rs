@@ -26,6 +26,7 @@ pub fn prepare(req:&Request,memories:&[String])->Vec<Message>{
  let traits=plan.map_or_else(||req.traits.map(|v|v.min(100)),|p|p.traits);
  let mut system=adaptive::context_prompt(personality::prompt(&req.mode,traits,memories),&req.profile);
  if let Some(p)=plan{system.push_str(&format!("\nResponse length: {}. Task context hint: {}. {} Explicit user requests take precedence over stylistic defaults. Task hints are fallible; continuation is not authorization for external actions.",p.length,p.task.label(),p.task.guidance()));}
+ if req.dynamic_style{system.push_str("\nNatural communication: ");system.push_str(&crate::communication::hint(&req.query,&req.history));}
  if let Some(mood)=&req.mood{system.push('\n');system.push_str(&mood.guidance());}
  let mut out=vec![Message{role:"system".into(),content:system}];
  out.extend(recent_context(&req.history,32,12000));out

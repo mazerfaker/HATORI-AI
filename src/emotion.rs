@@ -80,3 +80,17 @@ impl State{
  #[test]fn decay_preserves_remainder_and_future_time(){let mut s=State{mood:Mood::Joy,intensity:80,updated:100};s.decay(190);assert_eq!((s.intensity,s.updated),(75,160));s.decay(220);assert_eq!(s.intensity,70);s.decay(10);assert_eq!(s.updated,10);}
  #[test]fn legacy_serialization(){let s:State=serde_json::from_str(r#"{"mood":"Joy","intensity":50,"updated":100}"#).unwrap();assert_eq!(s.mood,Mood::Joy);assert_eq!(s.intensity,50);}
 }
+
+/// Align simulated visual/voice expression with the current task without mutating base traits.
+pub fn align(state:&mut State,task:crate::style::Task,query:&str){
+ use crate::style::Task;
+ if classify(query).serious&&state.mood!=Mood::Concern{state.mood=Mood::Calm;state.intensity=0;}
+ else if matches!(task,Task::Technical|Task::Research)&&state.mood!=Mood::Concern{state.intensity=state.intensity.min(25);}
+ if state.intensity==0{state.mood=Mood::Calm;}
+}
+/// Mild pace change for automatic spoken responses, not a claim about the user's emotions.
+pub fn voice_factor(state:&State)->f32{
+ let weight=f32::from(state.intensity.min(100))/100.;
+ match state.mood{Mood::Concern=>1.-0.12*weight,Mood::Joy=>1.+0.08*weight,Mood::Curiosity=>1.+0.03*weight,_=>1.}
+}
+#[cfg(test)]#[test]fn task_expression_and_voice(){let mut s=State{mood:Mood::Joy,intensity:90,updated:0};align(&mut s,crate::style::Task::Technical,"далі");assert_eq!(s.intensity,25);assert!(voice_factor(&s)<=1.03);align(&mut s,crate::style::Task::Technical,"помилка");assert_eq!(s.mood,Mood::Calm);assert_eq!(voice_factor(&s),1.);}
