@@ -64,7 +64,8 @@ impl Draft{
   for a in self.items.iter().filter(|a|a.preview.is_some()){
    let mut reader=image::ImageReader::new(std::io::Cursor::new(&a.bytes)).with_guessed_format().map_err(|e|e.to_string())?;
    let mut limits=image::Limits::default();limits.max_image_width=Some(4096);limits.max_image_height=Some(4096);limits.max_alloc=Some(80*1024*1024);reader.limits(limits);
-   let image=reader.decode().map_err(|e|e.to_string())?.thumbnail(1536,1536).to_rgb8();
+   let decoded=reader.decode().map_err(|e|e.to_string())?;
+   let image=if decoded.width()>1536||decoded.height()>1536{decoded.thumbnail(1536,1536).to_rgb8()}else{decoded.to_rgb8()};
    let mut bytes=Vec::new();
    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes,88).encode(image.as_raw(),image.width(),image.height(),image::ExtendedColorType::Rgb8).map_err(|e|e.to_string())?;
    out.push(bytes);

@@ -25,7 +25,7 @@ fn validate_image(w:usize,h:usize,len:usize)->Result<(),String>{
 fn encode_image(w:usize,h:usize,raw:Vec<u8>)->Result<(Vec<u8>,egui::ColorImage),String>{
  validate_image(w,h,raw.len())?;
  let img=image::RgbaImage::from_raw(w as u32,h as u32,raw).ok_or("Invalid image buffer")?;
- let img=image::DynamicImage::ImageRgba8(img).thumbnail(PREVIEW_DIM,PREVIEW_DIM).to_rgba8();
+ let img=if w>PREVIEW_DIM as usize||h>PREVIEW_DIM as usize{image::DynamicImage::ImageRgba8(img).thumbnail(PREVIEW_DIM,PREVIEW_DIM).to_rgba8()}else{img};
  let mut bytes=Vec::new();
  use image::ImageEncoder;
  image::codecs::png::PngEncoder::new(&mut bytes).write_image(img.as_raw(),img.width(),img.height(),image::ExtendedColorType::Rgba8).map_err(|e|e.to_string())?;

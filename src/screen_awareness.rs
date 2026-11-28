@@ -17,7 +17,8 @@ fn convert_bgra(w:u32,h:u32,raw:&[u8])->Result<image::RgbImage,String>{
  image::RgbImage::from_raw(w,h,rgb).ok_or_else(||"Invalid RGB buffer".into())
 }
 fn encode(w:u32,h:u32,raw:&[u8])->Result<Vec<u8>,String>{
- let img=image::DynamicImage::ImageRgb8(convert_bgra(w,h,raw)?).thumbnail(PREVIEW_DIM,PREVIEW_DIM).to_rgb8();
+ let img=convert_bgra(w,h,raw)?;
+ let img=if w>PREVIEW_DIM||h>PREVIEW_DIM{image::DynamicImage::ImageRgb8(img).thumbnail(PREVIEW_DIM,PREVIEW_DIM).to_rgb8()}else{img};
  let mut data=Vec::new();image::codecs::jpeg::JpegEncoder::new_with_quality(&mut data,90).encode(img.as_raw(),img.width(),img.height(),image::ExtendedColorType::Rgb8).map_err(|e|e.to_string())?;
  if data.is_empty()||data.len()>crate::attachments::MAX_FILE{return Err("Captured image exceeds attachment limit".into());}Ok(data)
 }
