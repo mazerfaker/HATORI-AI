@@ -45,7 +45,7 @@ pub fn run_with_multimodal(backend:&dyn Backend,req:&Request,reference:Option<&s
  if let Some(model)=&req.embedding_model{
   if !memory_query.is_empty(){if let Ok(mut found)=semantic::retrieve(&memory_query,&req.memories,model){
    for m in memories{if !found.contains(&m){found.push(m);}}
-   found.truncate(12);memories=found;
+   memories=memory_core::distinct(found,12);
   }}
  }
  if cancel(){emit(Event::Cancelled);return;}

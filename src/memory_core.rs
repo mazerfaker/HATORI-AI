@@ -16,7 +16,7 @@ pub fn ranked(query:&str,memories:&[(String,u8,i64)])->Vec<String>{
  Some((overlap,*importance,*id,content))
  }).collect();
  hits.sort_by(|a,b|b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(b.2.cmp(&a.2)));
- hits.into_iter().take(12).map(|(_,_,_,s)|s.clone()).collect()
+ distinct(hits.into_iter().map(|(_,_,_,s)|s.clone()),12)
 }
 #[cfg(test)]#[test]fn priority_and_relevance(){let m=vec![("guitar rock".into(),20,1),("guitar jazz".into(),90,2),("unrelated".into(),100,3)];assert_eq!(ranked("guitar",&m),vec!["guitar jazz","guitar rock"]);assert!(ranked("unknown",&m).is_empty());}
 
@@ -42,4 +42,24 @@ pub fn continuation_query(query:&str,history:&[crate::inference::Message])->Stri
  }
  #[test]fn no_history_no_recall(){assert_eq!(continuation_query("далі",&[m("assistant","private topic")]),"");}
  #[test]fn new_topic_not_inherited(){assert_eq!(continuation_query("guitar",&[m("user","Rust")]),"guitar");}
+}
+
+pub fn distinct(items:impl IntoIterator<Item=String>,limit:usize)->Vec<String>{
+ let mut seen=HashSet::new();let mut out=Vec::new();
+ for s in items{if out.len()>=limit{break;}let key=s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();if !key.is_empty()&&seen.insert(key){out.push(s);}}
+ out
+}
+/// Similar records may need manual review, never automatic deletion or rewriting.
+pub fn review_candidates(query:&str,memories:&[(String,u8,i64)])->Vec<i64>{
+ let a=words(query);if a.len()<2{return vec![];}
+ let mut hits:Vec<_>=memories.iter().filter_map(|(s,_,id)|{
+  let b=words(s);let shared=a.intersection(&b).count();
+  (shared>=2&&shared*2>=a.union(&b).count()).then_some((shared,*id))
+ }).collect();
+ hits.sort_by(|a,b|b.cmp(a));hits.into_iter().take(5).map(|(_,id)|id).collect()
+}
+#[cfg(test)]mod review_tests{
+ use super::*;
+ #[test]fn exact_dedup_preserves_meaning(){assert_eq!(distinct(vec![" I like Rust ".into(),"i LIKE rust".into(),"I dislike Rust".into()],12).len(),2);}
+ #[test]fn similar_not_unrelated(){let m=vec![("I prefer short answers".into(),80,1),("I prefer long answers".into(),80,2),("I play guitar".into(),99,3)];assert_eq!(review_candidates("I prefer short answers",&m),vec![1,2]);}
 }

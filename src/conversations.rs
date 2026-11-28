@@ -10,3 +10,23 @@ pub fn rename(d:&Connection,id:i64,title:&str)->Result<()>{d.execute("UPDATE cha
 pub fn append(d:&Connection,id:i64,role:&str,content:&str)->Result<()>{d.execute("INSERT INTO chat_messages(chat_id,role,content) VALUES(?1,?2,?3)",params![id,role,content])?;Ok(())}
 pub fn remove(d:&mut Connection,id:i64)->Result<()>{let tx=d.transaction()?;tx.execute("DELETE FROM chat_messages WHERE chat_id=?1",[id])?;tx.execute("DELETE FROM chats WHERE id=?1",[id])?;tx.commit()}
 #[cfg(test)]mod tests{use super::*;#[test]fn migration_and_isolation(){let d=Connection::open_in_memory().unwrap();d.execute_batch("CREATE TABLE messages(id INTEGER PRIMARY KEY,role TEXT,content TEXT);INSERT INTO messages VALUES(1,'user','old');").unwrap();migrate(&d).unwrap();migrate(&d).unwrap();let id=create(&d).unwrap();append(&d,id,"user","new").unwrap();assert_eq!(load(&d,1).unwrap().len(),1);assert_eq!(load(&d,id).unwrap()[0].content,"new");}}
+
+#[derive(Clone,Debug)]
+pub struct SearchHit{pub chat_id:i64,pub title:String,pub excerpt:String}
+/// Local manual search over the latest 2000 messages; no model or network access.
+pub fn search(d:&Connection,query:&str)->Result<Vec<SearchHit>>{
+ let needle=query.trim().chars().take(200).collect::<String>().to_lowercase();
+ if needle.chars().count()<2{return Ok(vec![]);}
+ let mut q=d.prepare("SELECT c.id,c.title,substr(m.content,1,16000) FROM chat_messages m JOIN chats c ON c.id=m.chat_id ORDER BY m.id DESC LIMIT 2000")?;
+ let rows=q.query_map([],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?;
+ let mut out=Vec::new();
+ for row in rows{let(chat_id,title,content)=row?;if content.to_lowercase().contains(&needle)||title.to_lowercase().contains(&needle){
+ let excerpt=content.chars().take(240).collect();out.push(SearchHit{chat_id,title,excerpt});if out.len()==20{break;}
+ }}
+ Ok(out)
+}
+#[cfg(test)]#[test]fn archive_search_and_delete(){
+ let mut d=Connection::open_in_memory().unwrap();d.execute_batch("CREATE TABLE messages(id INTEGER PRIMARY KEY,role TEXT,content TEXT);").unwrap();migrate(&d).unwrap();
+ let id=create(&d).unwrap();append(&d,id,"user","Проєкт Hatoriel").unwrap();
+ assert_eq!(search(&d,"ПРОЄКТ").unwrap()[0].chat_id,id);assert!(search(&d,"").unwrap().is_empty());remove(&mut d,id).unwrap();assert!(search(&d,"Hatoriel").unwrap().is_empty());
+}

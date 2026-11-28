@@ -14,3 +14,23 @@ pub fn duplicate(a:&str,b:&str)->bool{a.split_whitespace().collect::<Vec<_>>().j
  assert_eq!(suggest("Мені зручніше короткі відповіді").unwrap().category,"Preferences");
  assert!(suggest("Чи подобається тобі Rust?").is_none());
 }
+
+/// Extractive review draft: only explicit user statements, not model-generated facts.
+/// The caller must show the draft and obtain approval before storing it.
+pub fn summary(history:&[crate::inference::Message])->Option<Suggestion>{
+ let mut parts:Vec<String>=Vec::new();let mut budget=460usize;
+ for m in history.iter().rev().take(64).filter(|m|m.role=="user"){
+  let Some(s)=suggest(&m.content) else{continue;};
+  let n=s.content.chars().count()+3;
+  if n>budget||parts.iter().any(|p|duplicate(p,&s.content)){continue;}
+  parts.push(s.content);budget-=n;if parts.len()==4{break;}
+ }
+ if parts.len()<2{return None;}
+ parts.reverse();Some(Suggestion{content:format!("Conversation notes: {}",parts.join(" | ")),category:"General",importance:70})
+}
+#[cfg(test)]#[test]fn summary_is_extractive(){
+ use crate::inference::Message;
+ let m=|role:&str,content:&str|Message{role:role.into(),content:content.into()};
+ let s=summary(&[m("user","Наш проєкт Hatoriel"),m("assistant","Я люблю секрет"),m("user","Мені зручніше короткі відповіді")]).unwrap();
+ assert!(s.content.contains("Hatoriel"));assert!(!s.content.contains("секрет"));assert!(s.content.chars().count()<=500);
+}
