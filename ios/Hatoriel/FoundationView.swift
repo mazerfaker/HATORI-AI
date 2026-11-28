@@ -336,7 +336,8 @@ struct FoundationView: View {
                         LabeledContent("Пам’ять і профіль", value: "\(chat.memory.records.count)/100")
                     }
                 }
-                Section("Особистість") {
+                Section("Personality Engine 2.0") {
+                    Text("Риси визначають стиль відповіді, а не дозволи на дії. Збережені налаштування діють із наступного запиту.").font(.footnote)
                     Picker("Режим", selection: $personality.mode) {
                         ForEach(CoreOptions.modes, id: \.self) { mode in
                             Text(modeLabels[mode] ?? mode).tag(mode)
@@ -380,7 +381,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.7.9")
+                    Text("Crimson Core Minimal · 0.8.0")
                     Text("Rust Core " + coreVersion)
                 }
             }

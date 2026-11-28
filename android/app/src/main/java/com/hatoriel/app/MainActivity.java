@@ -109,6 +109,7 @@ public final class MainActivity extends Activity {
         transferStatus=label("Файл із ПК · до 8 МіБ",12);settings.addView(transferStatus);
         Button receiveFile=new Button(this);receiveFile.setText("Отримати файл з ПК");settings.addView(receiveFile);receiveFile.setOnClickListener(v->{String code=transferCode.getText().toString().trim();transferCode.setText("");receiveTransfer(code);});
         Button cancelFile=new Button(this);cancelFile.setText("Скасувати отримання");settings.addView(cancelFile);cancelFile.setOnClickListener(v->{if(transfer!=null)transfer.cancel();receivedTransfer=null;transferStatus.setText("Скасовано");});
+        Button personalityButton=new Button(this);personalityButton.setText("Особистість Hatoriel");settings.addView(personalityButton);personalityButton.setOnClickListener(v->showPersonality());
         localModelStatus=label("Локальна модель: підготовка runtime",12);settings.addView(localModelStatus);
         importModel=new Button(this);importModel.setText("Імпортувати GGUF");settings.addView(importModel);
         importModel.setOnClickListener(v->{if(importing||active!=null)return;new AlertDialog.Builder(this).setTitle("Імпорт локальної моделі").setMessage("Файл копіюється в приватне сховище Hatoriel. Попередня локальна модель буде замінена після успішного імпорту. Запуск моделі ще експериментальний і не підключений.").setNegativeButton("Скасувати",null).setPositiveButton("Обрати файл",(d,w)->{android.content.Intent intent=new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);intent.setType("*/*");intent.addCategory(android.content.Intent.CATEGORY_OPENABLE);try{startActivityForResult(intent,71);}catch(android.content.ActivityNotFoundException e){status.setText("Файловий менеджер недоступний");}}).show();});
@@ -156,6 +157,36 @@ public final class MainActivity extends Activity {
         }).show();
     }
     private void showSettings(boolean visible){if(visible){voiceReplyJob=null;voice.stop();}settingsScroll.setVisibility(visible?View.VISIBLE:View.GONE);scroll.setVisibility(visible?View.GONE:View.VISIBLE);composer.setVisibility(visible?View.GONE:View.VISIBLE);}
+    private void showPersonality(){
+        if(GenerationSession.active!=null)return;
+        try{
+            JSONObject opts=memory.options();String[] modes={"Companion","Assistant","Developer","Researcher"};
+            String[] names={"Аналітичність","Емпатія","Допитливість","Гумор","Ініціативність","Емоційність","Сарказм"};
+            int[] defaults={90,80,90,90,90,80,70},values=defaults.clone();
+            JSONArray stored=opts.optJSONArray("traits");if(stored!=null&&stored.length()==7)for(int i=0;i<7;i++)values[i]=Math.max(0,Math.min(100,stored.optInt(i,defaults[i])));
+            LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(16),dp(8),dp(16),dp(8));
+            android.widget.Spinner mode=new android.widget.Spinner(this);
+            android.widget.ArrayAdapter<String> adapter=new android.widget.ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,modes);mode.setAdapter(adapter);mode.setSelection(Math.max(0,java.util.Arrays.asList(modes).indexOf(opts.optString("mode"))));panel.addView(mode);
+            android.widget.SeekBar[] bars=new android.widget.SeekBar[7];
+            for(int i=0;i<7;i++){final int index=i;TextView title=label(names[i]+" · "+values[i],14);panel.addView(title);
+                android.widget.SeekBar bar=new android.widget.SeekBar(this);bar.setMax(100);bar.setProgress(values[i]);bars[i]=bar;panel.addView(bar);
+                bar.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener(){
+                    public void onProgressChanged(android.widget.SeekBar b,int value,boolean user){values[index]=value;title.setText(names[index]+" · "+value);}
+                    public void onStartTrackingTouch(android.widget.SeekBar b){}
+                    public void onStopTrackingTouch(android.widget.SeekBar b){}
+                });
+            }
+            android.widget.CheckBox dynamic=new android.widget.CheckBox(this);dynamic.setText("Адаптивний стиль");dynamic.setChecked(opts.optBoolean("dynamic_style",true));panel.addView(dynamic);
+            android.widget.CheckBox emotional=new android.widget.CheckBox(this);emotional.setText("Симуляція емоцій");emotional.setChecked(opts.optBoolean("emotion_enabled",false));panel.addView(emotional);
+            Button reset=new Button(this);reset.setText("Відновити базові риси");panel.addView(reset);reset.setOnClickListener(v->{for(int i=0;i<7;i++)bars[i].setProgress(defaults[i]);});
+            panel.addView(label("Риси визначають тон відповіді, а не права доступу. Це симуляція характеру; налаштування використовуються у контексті вибраної моделі.",12));
+            ScrollView scroll=new ScrollView(this);scroll.addView(panel);
+            new AlertDialog.Builder(this).setTitle("Personality Engine 2.0").setView(scroll).setNegativeButton("Скасувати",null).setPositiveButton("Зберегти",(d,w)->{
+                if(GenerationSession.active!=null)return;
+                try{memory.savePersonality(modes[mode.getSelectedItemPosition()],values,dynamic.isChecked(),emotional.isChecked());status.setText("Особистість збережено");}catch(Exception e){status.setText(e.getMessage());}
+            }).show();
+        }catch(Exception e){status.setText("Не вдалося відкрити особистість: "+e.getMessage());}
+    }
     private void receiveTransfer(String code){
         if(transfer!=null||receivedTransfer!=null||GenerationSession.active!=null)return;
         final String server=base,key=base.equals(bridgeEndpoint)?bridgeKey:"";

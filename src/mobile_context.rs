@@ -7,7 +7,7 @@ pub struct Options {
  pub mode:String,pub traits:[u8;7],pub dynamic_style:bool,pub emotion_enabled:bool,pub mood:emotion::State,
 }
 impl Default for Options {
- fn default()->Self{Self{mode:"Companion".into(),traits:[90,80,90,90,90,80,70],dynamic_style:true,emotion_enabled:false,mood:Default::default()}}
+ fn default()->Self{Self{mode:"Companion".into(),traits:crate::personality::DEFAULT_TRAITS,dynamic_style:true,emotion_enabled:false,mood:Default::default()}}
 }
 #[derive(Clone,Debug,Serialize,Deserialize)]
 pub struct Memory {pub id:i64,pub content:String,pub importance:u8}
@@ -24,7 +24,7 @@ pub fn prepare(mut input:Input,now:u64)->Result<Output,String>{
  if input.history.is_empty()||input.history.len()>32||input.history.iter().any(|m|!matches!(m.role.as_str(),"user"|"assistant")){return Err("Invalid history".into());}
  let query=input.history.last().filter(|m|m.role=="user").ok_or("Missing user message")?.content.clone();
  if query.trim().is_empty()||query.chars().count()>12000{return Err("Invalid user message".into());}
- if !matches!(input.options.mode.as_str(),"Companion"|"Assistant"|"Developer"|"Researcher"){return Err("Invalid personality mode".into());}
+ if !crate::personality::MODES.contains(&input.options.mode.as_str()){return Err("Invalid personality mode".into());}
  if input.memories.len()>100{return Err("Too many memories".into());}
  let traits=input.options.traits.map(|x|x.min(100));
  let mut mood=input.options.mood;

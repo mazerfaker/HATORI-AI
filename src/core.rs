@@ -22,7 +22,7 @@ pub fn recent_context(history:&[Message],max_messages:usize,max_chars:usize)->Ve
  recent.reverse();recent
 }
 pub fn prepare(req:&Request,memories:&[String])->Vec<Message>{
- let (traits,length)=if req.dynamic_style{style::effective(req.traits,&req.query,req.mood.as_ref(),&req.mode)}else{(req.traits,"Match the request")};
+ let (traits,length)=if req.dynamic_style{style::effective(req.traits,&req.query,req.mood.as_ref(),&req.mode)}else{(req.traits.map(|v|v.min(100)),"Match the request")};
  let mut system=adaptive::context_prompt(personality::prompt(&req.mode,traits,memories),&req.profile);
  if req.dynamic_style{system.push_str(&format!("\nResponse length: {length}. Explicit user requests take precedence over stylistic defaults."));}
  if let Some(mood)=&req.mood{system.push('\n');system.push_str(&mood.guidance());}
@@ -84,5 +84,6 @@ pub fn run_with_multimodal(backend:&dyn Backend,req:&Request,reference:Option<&s
   }
   let req=request();let mut out=vec![];run_with_multimodal(&Inspect,&req,Some("secret excerpt"),1,24000,&||false,|e|{out.push(e);true});assert_eq!(out,vec![Event::Done]);assert!(!req.history[0].content.contains("secret excerpt"));
  }
+ #[test]fn personality_shared_context(){let mut req=request();req.mode="Developer".into();req.traits=[0,80,90,90,90,80,70];req.query="серйозно".into();let m=prepare(&req,&[]);assert!(m[0].content.contains("sarcasm: 0"));assert!(m[0].content.contains("Avoid sarcasm"));assert!(m[0].content.contains("never invent build"));assert_eq!(req.traits[6],70);}
  #[test]fn unicode_budget(){let m=vec![Message{role:"user".into(),content:"абвг".into()}];assert_eq!(recent_context(&m,32,2)[0].content,"аб");}
 }

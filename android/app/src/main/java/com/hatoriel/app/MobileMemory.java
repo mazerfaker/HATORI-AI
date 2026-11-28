@@ -33,6 +33,12 @@ final class MobileMemory {
     JSONObject options()throws JSONException{
         return new JSONObject(prefs.getString("sync_options","{\"mode\":\"Companion\",\"traits\":[90,80,90,90,90,80,70],\"dynamic_style\":true,\"emotion_enabled\":false,\"mood\":{}}"));
     }
+    void savePersonality(String mode,int[] traits,boolean dynamic,boolean emotional)throws JSONException{
+        if(!java.util.Arrays.asList("Companion","Assistant","Developer","Researcher").contains(mode)||traits.length!=7)throw new IllegalArgumentException("Invalid personality");
+        JSONArray values=new JSONArray();for(int t:traits){if(t<0||t>100)throw new IllegalArgumentException("Invalid trait");values.put(t);}
+        JSONObject opts=new JSONObject().put("mode",mode).put("traits",values).put("dynamic_style",dynamic).put("emotion_enabled",emotional).put("mood",new JSONObject());
+        if(!prefs.edit().putString("sync_options",opts.toString()).commit())throw new IllegalStateException("Не вдалося зберегти особистість");
+    }
     JSONObject snapshot()throws JSONException{
         return new JSONObject().put("version",1).put("records",new JSONArray(prefs.getString("approved_memories","[]"))).put("profile",new JSONObject(prefs.getString("memory_profile","{}"))).put("options",options());
     }
