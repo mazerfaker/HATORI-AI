@@ -5,9 +5,9 @@ use rusqlite::{Connection,params};
 const TTL:Duration=Duration::from_secs(60);
 const MAX_AUDIT:usize=200;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText,Search,OfferFile,RegisterApp,LaunchApp,CaptureScreen}
+enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText,Search,OfferFile,RegisterApp,LaunchApp,CaptureScreen,ReadClipboardText,ReadClipboardImage,WriteClipboardText}
 impl Action{
- fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data",Self::GrantFolder=>"grant_folder",Self::ListFolder=>"list_folder",Self::ReadText=>"read_text",Self::Search=>"search_files",Self::OfferFile=>"offer_file",Self::RegisterApp=>"register_app",Self::LaunchApp=>"launch_app",Self::CaptureScreen=>"capture_screen"}}
+ fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data",Self::GrantFolder=>"grant_folder",Self::ListFolder=>"list_folder",Self::ReadText=>"read_text",Self::Search=>"search_files",Self::OfferFile=>"offer_file",Self::RegisterApp=>"register_app",Self::LaunchApp=>"launch_app",Self::CaptureScreen=>"capture_screen",Self::ReadClipboardText=>"clipboard_read_text",Self::ReadClipboardImage=>"clipboard_read_image",Self::WriteClipboardText=>"clipboard_write_text"}}
  fn label(self,en:bool)->&'static str{match (self,en){
   (Self::InspectStatus,true)=>"Inspect local application status",
   (Self::InspectStatus,false)=>"Переглянути локальний стан застосунку",
@@ -21,6 +21,9 @@ impl Action{
   (Self::RegisterApp,true)=>"Approve executable for this session",(Self::RegisterApp,false)=>"Дозволити програму на цей сеанс",
   (Self::LaunchApp,true)=>"Launch approved application",(Self::LaunchApp,false)=>"Запустити дозволену програму",
   (Self::CaptureScreen,true)=>"Capture primary monitor",(Self::CaptureScreen,false)=>"Зробити знімок основного монітора",
+  (Self::ReadClipboardText,true)=>"Read clipboard text",(Self::ReadClipboardText,false)=>"Прочитати текст буфера обміну",
+  (Self::ReadClipboardImage,true)=>"Read clipboard image",(Self::ReadClipboardImage,false)=>"Прочитати зображення буфера обміну",
+  (Self::WriteClipboardText,true)=>"Replace clipboard text",(Self::WriteClipboardText,false)=>"Записати текст у буфер обміну",
  }}
 }
 #[derive(Clone,Debug)]
@@ -34,7 +37,7 @@ impl Gate{
  fn propose(&mut self,action:Action,target:Option<PathBuf>,now:Instant)->Result<(),String>{
   if !self.enabled{return Err("Computer interaction disabled".into());}
   if self.pending.is_some(){return Err("Resolve the existing proposal first".into());}
-  if (!matches!(action,Action::InspectStatus|Action::CaptureScreen))!=target.is_some(){return Err("Invalid action target".into());}
+  if (!matches!(action,Action::InspectStatus|Action::CaptureScreen|Action::ReadClipboardText|Action::ReadClipboardImage|Action::WriteClipboardText))!=target.is_some(){return Err("Invalid action target".into());}
   self.pending=Some(Proposal{action,target,created:now});Ok(())
  }
  fn approve(&mut self,now:Instant)->Result<Proposal,String>{
@@ -89,9 +92,9 @@ struct SearchJob{
  rx:std::sync::mpsc::Receiver<Result<crate::file_search::Report,String>>,
 }
 #[derive(Default)]
-pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>,filter:crate::file_search::Filter,search_pending:Option<crate::file_search::Filter>,search_job:Option<SearchJob>,search_report:Option<crate::file_search::Report>,apps:crate::app_control::Catalog,screen:Option<crate::screen_awareness::Snapshot>,screen_attach:bool}
+pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>,filter:crate::file_search::Filter,search_pending:Option<crate::file_search::Filter>,search_job:Option<SearchJob>,search_report:Option<crate::file_search::Report>,apps:crate::app_control::Catalog,screen:Option<crate::screen_awareness::Snapshot>,screen_attach:bool,clipboard:Option<crate::clipboard_intelligence::Snapshot>,clipboard_attach:bool,clipboard_write:String,clipboard_pending:Option<String>}
 impl Computer{
- pub fn leave(&mut self){self.screen=None;self.screen_attach=false;self.gate.cancel();self.preview=None;self.search_pending=None;self.cancel_search();}
+ pub fn leave(&mut self){self.clear_clipboard();self.screen=None;self.screen_attach=false;self.gate.cancel();self.preview=None;self.search_pending=None;self.cancel_search();}
  fn cancel_search(&mut self){if let Some(j)=&self.search_job{j.cancel.store(true,std::sync::atomic::Ordering::Relaxed);}self.search_report=None;}
  pub fn poll(&mut self,db:Option<&Connection>){
   self.apps.poll();
@@ -109,17 +112,20 @@ impl Computer{
  }
  pub fn screen_for_chat(&mut self)->Option<Vec<u8>>{if !std::mem::take(&mut self.screen_attach){return None;}self.screen.as_ref().map(|s|s.bytes.clone())}
  pub fn screen_feedback(&mut self,message:String){self.status=message;}
- fn clear_view(&mut self){self.screen=None;self.screen_attach=false;self.current=None;self.entries.clear();self.preview=None;self.search_pending=None;self.cancel_search();}
+ fn clear_clipboard(&mut self){self.clipboard=None;self.clipboard_attach=false;self.clipboard_write.clear();self.clipboard_pending=None;}
+ pub fn clipboard_for_chat(&mut self)->Option<(&'static str,Vec<u8>,bool)>{if !std::mem::take(&mut self.clipboard_attach){return None;}self.clipboard.as_ref().map(|s|{let (n,b)=s.attachment();(n,b,s.is_image())})}
+ fn clear_view(&mut self){self.clear_clipboard();self.screen=None;self.screen_attach=false;self.current=None;self.entries.clear();self.preview=None;self.search_pending=None;self.cancel_search();}
  fn request(&mut self,action:Action,target:PathBuf){match self.gate.propose(action,Some(target),Instant::now()){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}}
  pub fn panel(&mut self,ui:&mut egui::Ui,db:Option<&Connection>,busy:bool,en:bool,backend:&str,model:&str,bridge:bool,transfers:&crate::file_transfer::Store){
   self.gate.expire(Instant::now());
+  if !self.gate.pending.as_ref().is_some_and(|p|p.action==Action::WriteClipboardText){self.clipboard_pending=None;}
   ui.heading(if en{"Computer interaction · File Access"}else{"Взаємодія з комп’ютером · File Access"});
   ui.label(if en{"Local, manual requests only. No AI-generated commands, remote requests or file modifications. Only explicitly granted folders."}else{"Лише локальні ручні запити. Без команд від ШІ, віддалених дій або зміни файлів. Лише дозволені папки."});
   let mut enabled=self.gate.enabled;
   if ui.checkbox(&mut enabled,if en{"Enable actions for this session"}else{"Дозволити дії в поточному сеансі"}).changed(){self.gate.enable(enabled);if !enabled{transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}self.status=if enabled{"Session permission granted / Дозвіл надано".into()}else{"Permission revoked / Дозвіл відкликано".into()};}
-  if busy{self.screen=None;self.screen_attach=false;self.gate.cancel();self.search_pending=None;self.cancel_search();}
+  if busy{self.clear_clipboard();self.screen=None;self.screen_attach=false;self.gate.cancel();self.search_pending=None;self.cancel_search();}
   if !bridge||!self.gate.enabled{transfers.clear();}
-  if db.is_none(){self.screen=None;self.screen_attach=false;transfers.clear();ui.label("Action journal unavailable. Execution blocked / Журнал недоступний. Дії заблоковані.");self.gate.cancel();}
+  if db.is_none(){self.clear_clipboard();self.screen=None;self.screen_attach=false;transfers.clear();ui.label("Action journal unavailable. Execution blocked / Журнал недоступний. Дії заблоковані.");self.gate.cancel();}
   let can=self.gate.enabled&&!busy&&db.is_some()&&self.gate.pending.is_none()&&self.search_job.is_none();
   for action in [Action::InspectStatus,Action::OpenData]{
    if ui.add_enabled(can&&(action!=Action::OpenData||cfg!(windows)),egui::Button::new(action.label(en))).clicked(){
@@ -127,6 +133,44 @@ impl Computer{
     match target.and_then(|t|self.gate.propose(action,t,Instant::now())){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}
    }
   }
+  ui.separator();ui.heading("Clipboard intelligence / Буфер обміну");
+  ui.small("Explicit one-time reads only. Clipboard may contain passwords or private data. Review before adding to chat. Windows clipboard history or cloud sync is controlled by the OS.");
+  ui.horizontal_wrapped(|ui|{
+   for action in [Action::ReadClipboardText,Action::ReadClipboardImage]{
+    if ui.add_enabled(can&&cfg!(windows),egui::Button::new(action.label(en))).clicked(){
+     match self.gate.propose(action,None,Instant::now()){Ok(())=>{self.clipboard_pending=None;self.status="Review required / Потрібне підтвердження".into();},Err(e)=>self.status=e}
+    }
+   }
+  });
+  if let Some(snapshot)=&self.clipboard{
+   match snapshot{
+    crate::clipboard_intelligence::Snapshot::Text(text)=>{
+     ui.small(format!("{} bytes · RAM only",text.len()));
+     egui::ScrollArea::vertical().id_salt("clipboard-preview").max_height(180.).show(ui,|ui|{ui.label(text);});
+    },
+    crate::clipboard_intelligence::Snapshot::Image{bytes,texture,width,height}=>{
+     ui.small(format!("{width} × {height} source · PNG {} KiB · RAM only",bytes.len()/1024));
+     ui.add(egui::Image::new(texture).max_size(egui::vec2(ui.available_width().min(760.),380.)));
+     ui.collapsing("Inspect image / Детальний перегляд",|ui|{egui::ScrollArea::both().id_salt("clipboard-detail").max_height(350.).show(ui,|ui|{ui.add(egui::Image::new(texture));});});
+    },
+   }
+   let mut discard=false;
+   ui.horizontal(|ui|{
+    if ui.add_enabled(can&&(!snapshot.is_image()||backend=="Ollama"),egui::Button::new("Add to chat draft / Додати в чат")).clicked(){self.clipboard_attach=true;}
+    discard=ui.button("Discard / Видалити прев’ю").clicked();
+   });
+   if discard{self.clipboard=None;self.clipboard_attach=false;}
+   ui.small("Adding creates a local attachment; document or Vision review is still required before sending.");
+  }
+  ui.collapsing("Write clipboard text / Запис тексту",|ui|{
+   ui.small("Overwrites current system clipboard. Only the reviewed text is written; no paste or command execution.");
+   ui.add_enabled(can,egui::TextEdit::multiline(&mut self.clipboard_write).desired_rows(3).char_limit(crate::clipboard_intelligence::MAX_TEXT));
+   if ui.add_enabled(can&&cfg!(windows),egui::Button::new("Review replacement / Перевірити запис")).clicked(){
+    match crate::clipboard_intelligence::validate_text(&self.clipboard_write).and_then(|_|self.gate.propose(Action::WriteClipboardText,None,Instant::now())){
+     Ok(())=>{self.clipboard_pending=Some(self.clipboard_write.clone());self.status="Review required / Потрібне підтвердження".into();},Err(e)=>self.status=e,
+    }
+   }
+  });
   ui.separator();ui.heading("Screen awareness / Аналіз екрана");
   ui.small("One screenshot of the primary monitor, including Hatoriel and any visible private content. No background capture. Review before adding to chat.");
   if ui.add_enabled(can&&cfg!(windows),egui::Button::new("Capture screen / Знімок екрана")).clicked(){
@@ -222,6 +266,8 @@ impl Computer{
    ui.separator();ui.label(egui::RichText::new("REVIEW / ПІДТВЕРДЖЕННЯ").color(crate::crimson::RED).strong());
    ui.label(p.action.label(en));
    if let Some(path)=&p.target{ui.label(path.display().to_string());ui.small(match p.action{Action::OpenData=>"Opens Explorer, no content read.",Action::GrantFolder=>"Grants read-only access for this session, not automatic scanning.",Action::ListFolder=>"Lists at most 200 immediate entries, no recursion.",Action::ReadText=>"Reads at most 64 KiB of supported plain text, displayed locally.",Action::Search=>"Recursive scan: up to 4000 entries, 200 results, 64 text reads, cooperative 5s limit. No upload.",Action::OfferFile=>"Creates a memory-only copy of the original file for one authenticated HTTPS download within 120 seconds. Not bound to one device; protect both codes.",Action::RegisterApp=>"Trust this specific executable for this session. Its SHA-256 will be recorded in memory; only choose software you trust.",Action::LaunchApp=>"Launch this executable without arguments. It runs with your user permissions and can act independently. No sandbox or elevation request.",_=>""});}
+   else if matches!(p.action,Action::ReadClipboardText|Action::ReadClipboardImage){ui.small("Read the current clipboard once. Private content may be displayed locally. Nothing sent to a model.");}
+   else if p.action==Action::WriteClipboardText{ui.small("Replace current clipboard with the exact reviewed text below. Windows clipboard history/sync may retain it.");if let Some(text)=&self.clipboard_pending{egui::ScrollArea::vertical().id_salt("clipboard-write-review").max_height(180.).show(ui,|ui|{ui.label(text);});}}
    else if p.action==Action::CaptureScreen{ui.small("Capture the current visible primary monitor now, including sensitive windows. Close private content first. No file write or model request.");}
    else{ui.small("Displays current backend, selected model, app storage mode and bridge state. / Лише стан застосунку.");}
    if p.action==Action::Search{if let Some(f)=&self.search_pending{ui.label(format!("Name: {:?} · Extension: {:?} · Content: {:?} · size {}–{} KiB (0 max = any) · recent {} days",f.name,f.extension,f.content,f.min_kib,f.max_kib,f.recent_days));}}
@@ -231,7 +277,7 @@ impl Computer{
     approve=ui.add_enabled(!busy&&self.gate.enabled&&db.is_some()&&(p.action!=Action::OfferFile||bridge),egui::Button::new("Confirm once / Підтвердити один раз")).clicked();
     cancel=ui.button("Cancel / Скасувати").clicked();
    });
-   if cancel{self.gate.cancel();self.search_pending=None;self.status="Cancelled / Скасовано".into();}
+   if cancel{self.gate.cancel();self.clipboard_pending=None;self.search_pending=None;self.status="Cancelled / Скасовано".into();}
    else if approve{
     match self.gate.approve(Instant::now()){
      Ok(p)=>if let Some(db)=db{
@@ -239,11 +285,14 @@ impl Computer{
        Ok(id)=>{
         if p.action==Action::Search{
          let result=match (p.target,self.search_pending.take()){(Some(root),Some(filter))=>self.start_search(id,root,filter),_=>Err("Missing approved search parameters".into())};
-         match result{Ok(())=>self.status="Search started / Пошук розпочато".into(),Err(e)=>{self.status=e;if finish(db,id,"failed").is_err(){self.gate.enable(false);self.scopes.clear();self.clear_view();}}}
+         match result{Ok(())=>self.status="Search started / Пошук розпочато".into(),Err(e)=>{self.status=e;if finish(db,id,"failed").is_err(){self.gate.enable(false);transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}}}
          return;
         }
         let result=match p.action{
          Action::Search=>Err("Search dispatch error".into()),
+         Action::ReadClipboardText=>{self.clipboard=None;self.clipboard_attach=false;crate::clipboard_intelligence::read_text().map(|s|{self.clipboard=Some(s);"Clipboard text ready / Текст готовий".into()})},
+         Action::ReadClipboardImage=>{self.clipboard=None;self.clipboard_attach=false;crate::clipboard_intelligence::read_image(ui.ctx()).map(|s|{self.clipboard=Some(s);"Clipboard image ready / Зображення готове".into()})},
+         Action::WriteClipboardText=>self.clipboard_pending.take().ok_or_else(||"Missing reviewed clipboard text".to_string()).and_then(|text|crate::clipboard_intelligence::write_text(&text)).map(|_|{self.clipboard_write.clear();self.clipboard=None;self.clipboard_attach=false;"Clipboard replaced / Буфер оновлено".into()}),
          Action::CaptureScreen=>{self.screen=None;self.screen_attach=false;crate::screen_awareness::capture(ui.ctx()).map(|shot|{self.screen=Some(shot);"Screenshot captured locally / Знімок готовий до перегляду".into()})},
          Action::RegisterApp=>p.target.as_deref().ok_or_else(||"Missing executable".to_string()).and_then(|path|self.apps.register(path)).map(|_|"Executable approved for this session / Програму дозволено".into()),
          Action::LaunchApp=>p.target.as_deref().ok_or_else(||"Missing executable".to_string()).and_then(|path|self.apps.launch(path)).map(|pid|format!("Launch requested · PID {pid} / Запуск запитано")),
@@ -283,6 +332,7 @@ impl Computer{
  #[test]fn permission_one_shot(){let now=Instant::now();let mut g=Gate::default();assert!(g.propose(Action::InspectStatus,None,now).is_err());g.enable(true);g.propose(Action::InspectStatus,None,now).unwrap();assert!(g.propose(Action::InspectStatus,None,now).is_err());assert_eq!(g.approve(now).unwrap().action,Action::InspectStatus);assert!(g.approve(now).is_err());}
  #[test]fn expiry_revocation_and_target(){let now=Instant::now();let mut g=Gate::default();g.enable(true);assert!(g.propose(Action::OpenData,None,now).is_err());g.propose(Action::OpenData,Some(PathBuf::from("approved")),now).unwrap();assert!(g.approve(now+TTL).is_err());g.propose(Action::InspectStatus,None,now).unwrap();g.enable(false);assert!(g.approve(now).is_err());}
  #[test]fn screen_confirmation_is_one_shot(){let now=Instant::now();let mut g=Gate::default();assert!(g.propose(Action::CaptureScreen,None,now).is_err());g.enable(true);assert!(g.propose(Action::CaptureScreen,Some(PathBuf::from("invalid")),now).is_err());g.propose(Action::CaptureScreen,None,now).unwrap();assert_eq!(g.approve(now).unwrap().action,Action::CaptureScreen);assert!(g.approve(now).is_err());}
+ #[test]fn clipboard_actions_require_one_shot(){let now=Instant::now();let mut g=Gate::default();for action in [Action::ReadClipboardText,Action::ReadClipboardImage,Action::WriteClipboardText]{assert!(g.propose(action,None,now).is_err());}g.enable(true);for action in [Action::ReadClipboardText,Action::ReadClipboardImage,Action::WriteClipboardText]{assert!(g.propose(action,Some(PathBuf::from("invalid")),now).is_err());g.propose(action,None,now).unwrap();assert_eq!(g.approve(now).unwrap().action,action);assert!(g.approve(now).is_err());}}
  #[test]fn journal_bounds(){let db=Connection::open_in_memory().unwrap();for _ in 0..MAX_AUDIT+3{let id=begin(&db,Action::InspectStatus).unwrap();finish(&db,id,"completed").unwrap();}let count:i64=db.query_row("SELECT COUNT(*) FROM computer_audit",[],|r|r.get(0)).unwrap();assert_eq!(count,MAX_AUDIT as i64);let rows=recent(&db).unwrap();assert_eq!(rows.len(),30);assert_eq!(rows[0].1,"inspect_status");assert_eq!(rows[0].2,"completed");}
  #[test]fn audit_fail_closed(){let db=Connection::open_in_memory().unwrap();db.execute_batch("CREATE TABLE computer_audit(wrong INTEGER);").unwrap();assert!(begin(&db,Action::InspectStatus).is_err());}
 }
