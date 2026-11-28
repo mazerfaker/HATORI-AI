@@ -131,6 +131,14 @@ struct ChatEntry: Codable, Identifiable {
         try saveMemory(id: nil, content: item.content, category: item.category, importance: item.importance)
         suggestion = nil
     }
+    func proposeSummary() throws {
+        guard !busy, memoryError == nil, memory.suggestionsEnabled else { throw CoreFailure.rejected("Пропозиції пам’яті недоступні.") }
+        guard suggestion == nil else { throw CoreFailure.rejected("Спочатку переглянь наявну пропозицію.") }
+        let recent = history.suffix(64).map { CoreMessage(role: $0.role, content: $0.content) }
+        guard let item = try NativeCore.suggestSummary(recent) else { throw CoreFailure.rejected("Недостатньо явних фактів для підсумку.") }
+        guard !memory.records.contains(where: { MemoryVault.normalized($0.content) == MemoryVault.normalized(item.content) }) else { throw CoreFailure.rejected("Такий спогад уже існує.") }
+        suggestion = item
+    }
     private func proposeMemory(_ text: String) {
         guard memoryError == nil, memory.suggestionsEnabled, suggestion == nil,
               let item = try? NativeCore.suggestMemory(text),

@@ -94,6 +94,13 @@ enum NativeCore {
         }
         return try JSONDecoder().decode(MemorySuggestion?.self, from: Data(output.utf8))
     }
+    static func suggestSummary(_ history: [CoreMessage]) throws -> MemorySuggestion? {
+        let input = try JSONEncoder().encode(history)
+        let output = try input.withUnsafeBytes { buffer in
+            try consume(hatoriel_suggest_summary(buffer.bindMemory(to: UInt8.self).baseAddress, buffer.count))
+        }
+        return try JSONDecoder().decode(MemorySuggestion?.self, from: Data(output.utf8))
+    }
     static func sync<T: Encodable, R: Decodable>(_ command: T, as type: R.Type) throws -> R {
         let input = try JSONEncoder().encode(command)
         let output = try input.withUnsafeBytes { buffer in

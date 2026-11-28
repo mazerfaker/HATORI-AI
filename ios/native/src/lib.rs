@@ -64,3 +64,12 @@ pub unsafe extern "C" fn hatoriel_sync(data:*const u8,len:usize)->*mut c_char{
  });
  owned(match result{Ok(Ok(s))=>s,Ok(Err(e))=>serde_json::json!({"error":e}).to_string(),Err(_)=>serde_json::json!({"error":"Sync core failure"}).to_string()})
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn hatoriel_suggest_summary(data:*const u8,len:usize)->*mut c_char{
+ let result=std::panic::catch_unwind(||->Result<String,String>{
+ if data.is_null()||len==0||len>1024*1024{return Ok("null".into());}
+ hatori_ai::memory_suggest::summary_json(unsafe{std::slice::from_raw_parts(data,len)})
+ });
+ owned(match result{Ok(Ok(s))=>s,_=>"null".into()})
+}

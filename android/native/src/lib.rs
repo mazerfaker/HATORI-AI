@@ -70,3 +70,9 @@ pub extern "system" fn Java_com_hatoriel_app_NativeCore_sync(mut env:JNIEnv,_cla
  let value=match result{Ok(Ok(s))=>s,Ok(Err(e))=>serde_json::json!({"error":e}).to_string(),Err(_)=>serde_json::json!({"error":"Sync core failure"}).to_string()};
  env.new_string(value).map(|s|s.into_raw()).unwrap_or(null_mut())
 }
+
+#[no_mangle]
+pub extern "system" fn Java_com_hatoriel_app_NativeCore_suggestSummary(mut env:JNIEnv,_class:JClass,input:JString)->jstring{
+ let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<String,String>{let json:String=env.get_string(&input).map_err(|e|e.to_string())?.into();hatori_ai::memory_suggest::summary_json(json.as_bytes())}));
+ let value=match result{Ok(Ok(s))=>s,_=>"null".into()};env.new_string(value).map(|s|s.into_raw()).unwrap_or(null_mut())
+}

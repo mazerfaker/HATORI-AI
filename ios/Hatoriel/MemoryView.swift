@@ -40,6 +40,15 @@ import SwiftUI
                         else { savePermissions() }
                     }
                 }
+                Section("Підсумок розмови") {
+                    Button("Запропонувати підсумок") { perform { try chat.proposeSummary() } }
+                        .disabled(chat.busy || !chat.memory.suggestionsEnabled || chat.suggestion != nil)
+                    if let item = chat.suggestion {
+                        Text(item.content)
+                        Button("Зберегти після перегляду") { perform { try chat.approveSuggestion() } }
+                        Button("Відхилити", role: .cancel) { chat.dismissSuggestion() }
+                    }
+                }
                 Section("Профіль користувача") {
                     TextField("Інтереси", text: $profile.interests, axis: .vertical)
                     TextField("Стиль спілкування", text: $profile.communication, axis: .vertical)

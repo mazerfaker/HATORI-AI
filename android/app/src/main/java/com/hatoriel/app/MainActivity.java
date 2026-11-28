@@ -286,7 +286,11 @@ public final class MainActivity extends Activity {
     }
     private void offerMemory(String query){
         if(!memory.suggestions())return;
-        try{String raw=NativeCore.suggestMemory(query);if(raw==null||"null".equals(raw))return;JSONObject m=new JSONObject(raw);
+        try{showMemoryDraft(NativeCore.suggestMemory(query));}catch(Exception|LinkageError e){status.setText("Помилка пропозиції спогаду");}
+    }
+    private void showMemoryDraft(String raw){
+        if(!memory.suggestions())return;
+        try{if(raw==null||"null".equals(raw))return;JSONObject m=new JSONObject(raw);
             String content=m.getString("content");if(memory.contains(content))return;
             new AlertDialog.Builder(this).setTitle("Запам’ятати?").setMessage(content+"\n"+m.optString("category")+" · "+m.optInt("importance",50)+"/100")
                 .setNegativeButton("Відхилити",null).setPositiveButton("Зберегти",(d,w)->{try{memory.save(content,m.optString("category","General"),m.optInt("importance",50));Toast.makeText(this,"Спогад збережено",Toast.LENGTH_SHORT).show();}catch(Exception e){status.setText(e.getMessage());}}).show();
@@ -298,6 +302,7 @@ public final class MainActivity extends Activity {
         CheckBox use=new CheckBox(this);use.setText("Використовувати пам’ять у відповідях");use.setChecked(memory.enabled());panel.addView(use);
         use.setOnCheckedChangeListener((b,checked)->{if(!checked){memory.setEnabled(false);return;}new AlertDialog.Builder(this).setTitle("Дозволити контекст пам’яті?").setMessage("Релевантні спогади та профіль передаватимуться вибраному AI-серверу: "+base).setNegativeButton("Ні",(d,w)->use.setChecked(false)).setPositiveButton("Дозволити",(d,w)->memory.setEnabled(true)).setOnCancelListener(d->use.setChecked(false)).show();});
         CheckBox suggest=new CheckBox(this);suggest.setText("Пропонувати нові спогади");suggest.setChecked(memory.suggestions());panel.addView(suggest);suggest.setOnCheckedChangeListener((b,checked)->memory.setSuggestions(checked));
+        Button notes=new Button(this);notes.setText("Запропонувати підсумок розмови");notes.setEnabled(memory.suggestions());panel.addView(notes);
         Button add=new Button(this);add.setText("Додати спогад");panel.addView(add);
         Button profile=new Button(this);profile.setText("Редагувати профіль");panel.addView(profile);
         Button transfer=new Button(this);transfer.setText("Захищене перенесення");panel.addView(transfer);
@@ -306,6 +311,8 @@ public final class MainActivity extends Activity {
             Button remove=new Button(this);remove.setText("Видалити");panel.addView(remove);remove.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Видалити спогад?").setNegativeButton("Скасувати",null).setPositiveButton("Видалити",(d,w)->{memory.remove(m.optLong("id"));item.setVisibility(View.GONE);remove.setVisibility(View.GONE);}).show());
         }
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Пам’ять Hatoriel").setView(sv).setPositiveButton("Закрити",null).create();
+        suggest.setOnCheckedChangeListener((b,checked)->{memory.setSuggestions(checked);notes.setEnabled(checked);});
+        notes.setOnClickListener(v->{dialog.dismiss();if(!memory.suggestions())return;try{JSONArray recent=new JSONArray();for(int i=Math.max(0,history.length()-64);i<history.length();i++)recent.put(history.opt(i));String raw=NativeCore.suggestSummary(recent.toString());if(raw==null||"null".equals(raw))status.setText("Недостатньо явних фактів для підсумку");else showMemoryDraft(raw);}catch(Exception|LinkageError e){status.setText("Помилка підсумку");}});
         add.setOnClickListener(v->{dialog.dismiss();addMemory();});profile.setOnClickListener(v->{dialog.dismiss();editProfile();});transfer.setOnClickListener(v->{dialog.dismiss();showTransfer();});dialog.show();
     }
     private void showTransfer(){

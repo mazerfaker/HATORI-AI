@@ -9,4 +9,5 @@ public final class NativeCore {
     public static native String prepareMemory(String contextJson);
     public static native String prepareContext(String contextJson);
     public static native String suggestMemory(String input);
+    public static native String suggestSummary(String historyJson);
 }
