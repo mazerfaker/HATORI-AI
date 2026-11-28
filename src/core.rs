@@ -40,12 +40,13 @@ pub fn run_with_reference(backend:&dyn Backend,req:&Request,reference:Option<&st
 }
 pub fn run_with_multimodal(backend:&dyn Backend,req:&Request,reference:Option<&str>,images:usize,budget:usize,cancel:&dyn Fn()->bool,mut emit:impl FnMut(Event)->bool){
  if cancel(){emit(Event::Cancelled);return;}
- let mut memories=memory_core::ranked(&req.query,&req.memories);
+ let memory_query=memory_core::continuation_query(&req.query,&req.history);
+ let mut memories=memory_core::ranked(&memory_query,&req.memories);
  if let Some(model)=&req.embedding_model{
-  if let Ok(mut found)=semantic::retrieve(&req.query,&req.memories,model){
+  if !memory_query.is_empty(){if let Ok(mut found)=semantic::retrieve(&memory_query,&req.memories,model){
    for m in memories{if !found.contains(&m){found.push(m);}}
    found.truncate(12);memories=found;
-  }
+  }}
  }
  if cancel(){emit(Event::Cancelled);return;}
  let mut messages=prepare(req,&memories);
