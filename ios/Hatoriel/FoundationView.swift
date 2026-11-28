@@ -6,9 +6,32 @@ private let graphite = Color(red: 28/255, green: 28/255, blue: 30/255)
 private let surface = Color(red: 43/255, green: 43/255, blue: 46/255)
 private let crimson = Color(red: 238/255, green: 52/255, blue: 52/255)
 
+private struct ReticleExpression {
+    var from = [Double](repeating: 0, count: 4)
+    var target = CoreMood()
+    var started = Date.distantPast
+    static func weights(_ mood: CoreMood, at date: Date) -> [Double] {
+        var values = [Double](repeating: 0, count: 4)
+        guard let i = ["Joy","Concern","Surprise","Curiosity"].firstIndex(of: mood.mood) else { return values }
+        let age = max(0, date.timeIntervalSince1970 - Double(mood.updated))
+        values[i] = max(0, Double(min(mood.intensity,100)) - floor(age/60)*5)/100
+        return values
+    }
+    func sample(at date: Date, still: Bool) -> [Double] {
+        let to = Self.weights(target, at: date)
+        let u = still ? 1.0 : max(0,min(1,date.timeIntervalSince(started)/0.35))
+        let t = u*u*(3-2*u)
+        return zip(from,to).map { $0.0+($0.1-$0.0)*t }
+    }
+    mutating func change(_ mood: CoreMood, at date: Date, still: Bool) {
+        from = sample(at: date, still: still); target = mood; started = date
+    }
+}
 struct CrimsonReticle: View {
     var state: CrimsonState = .idle
     var motion = true
+    var mood = CoreMood()
+    @State private var expression = ReticleExpression()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
@@ -18,11 +41,13 @@ struct CrimsonReticle: View {
             let speed: Double = state == .speaking ? 6 : state == .listening ? 3 : state == .responding ? 5 : state == .thinking ? 3 : 1.8
             let amplitude: Double = state == .speaking ? 0.065 : state == .listening ? 0.05 : 0.035
             let pulse = still ? 1.0 : 1.0 + sin(time * speed) * amplitude
+            let weights = still ? ReticleExpression.weights(mood, at: Date()) : expression.sample(at: timeline.date, still: false)
+            let joy = weights[0], concern = weights[1], surprise = weights[2], curiosity = weights[3]
             Canvas { context, size in
                 let center = CGPoint(x: size.width/2, y: size.height/2)
-                let r = min(size.width, size.height) * 0.27 * CGFloat(pulse)
+                let r = min(size.width, size.height) * 0.255 * CGFloat(pulse * (1+0.055*joy-0.045*concern+0.075*surprise))
                 let circle = Path(ellipseIn: CGRect(x: center.x-r, y: center.y-r, width: 2*r, height: 2*r))
-                context.stroke(circle, with: .color(crimson.opacity(state == .completed ? 0.24 : 0.10)), lineWidth: state == .completed ? 10 : 8)
+                context.stroke(circle, with: .color(crimson.opacity(min(0.36,(state == .completed ? 0.24 : 0.10)+0.16*min(1,joy+0.45*concern+surprise+0.65*curiosity)))), lineWidth: state == .completed ? 10 : 8)
                 context.stroke(circle, with: .color(crimson), lineWidth: 2)
                 for i in 0..<4 {
                     let a = CGFloat(i) * .pi/2
@@ -30,6 +55,27 @@ struct CrimsonReticle: View {
                     line.move(to: CGPoint(x: center.x+cos(a)*r*0.68, y: center.y+sin(a)*r*0.68))
                     line.addLine(to: CGPoint(x: center.x+cos(a)*r*1.42, y: center.y+sin(a)*r*1.42))
                     context.stroke(line, with: .color(crimson), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                }
+                if joy > 0.001 || concern > 0.001 {
+                    for (factor, weight) in [(0.8,joy),(0.55,concern)] where weight > 0.001 {
+                        let e = r*CGFloat(factor)
+                        let ring = Path(ellipseIn: CGRect(x: center.x-e,y: center.y-e,width: 2*e,height: 2*e))
+                        context.stroke(ring, with: .color(crimson.opacity(weight*0.8)), lineWidth: 1.4)
+                    }
+                }
+                if surprise > 0.001 {
+                    for i in 0..<4 {
+                        let start = Double(i)*90+18
+                        var arc = Path(); arc.addArc(center: center, radius: r*1.16, startAngle: .degrees(start), endAngle: .degrees(start+26), clockwise: false)
+                        context.stroke(arc, with: .color(crimson.opacity(surprise)), lineWidth: 1.6)
+                    }
+                }
+                if curiosity > 0.001 {
+                    for i in 0..<2 {
+                        let start = (still ? 0 : time*46)+Double(i)*180
+                        var arc = Path(); arc.addArc(center: center, radius: r*0.77, startAngle: .degrees(start), endAngle: .degrees(start+54), clockwise: false)
+                        context.stroke(arc, with: .color(crimson.opacity(curiosity*0.85)), lineWidth: 1.6)
+                    }
                 }
                 if state == .thinking || state == .preparing {
                     for i in 0..<3 {
@@ -66,6 +112,8 @@ struct CrimsonReticle: View {
                 context.fill(Path(ellipseIn: CGRect(x: center.x-2, y: center.y-2, width: 4, height: 4)), with: .color(crimson))
             }
         }
+        .onAppear { expression.change(mood, at: Date(), still: true) }
+        .onChange(of: mood) { value in expression.change(value, at: Date(), still: !motion || reduceMotion || scenePhase != .active) }
         .accessibilityHidden(true)
     }
 }
@@ -115,7 +163,7 @@ struct FoundationView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                CrimsonReticle(state: avatarState, motion: motion).frame(width: 44, height: 44)
+                CrimsonReticle(state: avatarState, motion: motion, mood: chat.options.emotion_enabled ? chat.options.mood : CoreMood()).frame(width: 44, height: 44)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("HATORIEL").font(.headline).tracking(2).lineLimit(1).minimumScaleFactor(0.7)
                     Text(chat.localMode ? "CRIMSON CORE · LOCAL" : chat.desktopMode ? "CRIMSON CORE · PC" : "CRIMSON CORE").font(.caption2).foregroundStyle(crimson).lineLimit(1).minimumScaleFactor(0.7)
@@ -132,7 +180,7 @@ struct FoundationView: View {
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         if chat.history.isEmpty {
-                            CrimsonReticle(state: avatarState, motion: motion).frame(width: 148, height: 148).padding(.top, 24)
+                            CrimsonReticle(state: avatarState, motion: motion, mood: chat.options.emotion_enabled ? chat.options.mood : CoreMood()).frame(width: 148, height: 148).padding(.top, 24)
                             Text("Готова до діалогу").font(.title2.bold())
                             Text("Чим можу допомогти?").foregroundStyle(.secondary)
                         }
@@ -381,7 +429,7 @@ struct FoundationView: View {
                     Text("Історія зберігається у локальних налаштуваннях застосунку. Додаткового шифрування немає.").font(.footnote)
                 }
                 Section("Про Hatoriel") {
-                    Text("Crimson Core Minimal · 0.8.1")
+                    Text("Crimson Core Minimal · 0.8.2")
                     Text("Rust Core " + coreVersion)
                 }
             }

@@ -31,7 +31,7 @@ impl Presence {
     pub fn available(&self)->bool { #[cfg(windows)] {self.tray.is_some()} #[cfg(not(windows))] {false} }
     pub fn hide(&mut self, ctx:&egui::Context) { if self.available() { self.hidden=true; ctx.send_viewport_cmd(Cmd::Minimized(true)); } }
     fn restore(&mut self,ctx:&egui::Context) { self.hidden=false; ctx.send_viewport_cmd(Cmd::Visible(true)); ctx.send_viewport_cmd(Cmd::Minimized(false)); ctx.send_viewport_cmd(Cmd::Focus); }
-    pub fn update(&mut self,ctx:&egui::Context,cfg:&mut Config,state:super::crimson::State,mood:u8)->bool {
+    pub fn update(&mut self,ctx:&egui::Context,cfg:&mut Config,state:super::crimson::State,mood:super::crimson::Expression)->bool {
         let mut changed=false;
         #[cfg(windows)] {
             use tray_icon::{TrayIconEvent, menu::MenuEvent};
@@ -46,14 +46,14 @@ impl Presence {
             if self.hidden && ctx.input(|i|i.viewport().minimized==Some(false)) {self.hidden=false;}
         }
         if cfg.avatar && !self.exiting {
-            ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("hatori-avatar"),egui::ViewportBuilder::default().with_title("Hatoriel Avatar").with_inner_size([180.,205.]).with_decorations(false).with_transparent(true).with_resizable(false).with_always_on_top(),|ctx,_class| {
+            ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("hatori-avatar"),egui::ViewportBuilder::default().with_title("Hatoriel Avatar").with_inner_size([200.,220.]).with_decorations(false).with_transparent(true).with_resizable(false).with_always_on_top(),|ctx,_class| {
                 if ctx.input(|i|i.viewport().close_requested()) {cfg.avatar=false;changed=true;}
                 egui::CentralPanel::default().frame(egui::Frame::none().fill(Color32::TRANSPARENT)).show(ctx,|ui| {
-                    let (r,response)=ui.allocate_exact_size(egui::vec2(180.,160.),egui::Sense::click_and_drag());
+                    let (r,response)=ui.allocate_exact_size(egui::vec2(ui.available_width(),168.),egui::Sense::click_and_drag());
                     if response.drag_started(){ctx.send_viewport_cmd(Cmd::StartDrag);}
                     let p=ui.painter();let c=r.center();let t=ctx.input(|i|i.time) as f32;
-                    super::crimson::reticle(p,c,34.,t,state,cfg.avatar_motion,mood);
-                    p.text(c+egui::vec2(0.,65.),egui::Align2::CENTER_CENTER,state.label(),egui::FontId::monospace(12.),super::crimson::RED);
+                    super::crimson::reticle(p,c,37.,t,state,cfg.avatar_motion,mood);
+                    p.text(c+egui::vec2(0.,76.),egui::Align2::CENTER_CENTER,state.label(),egui::FontId::monospace(12.),super::crimson::RED);
                     ui.horizontal(|ui|{if ui.small_button("Open").clicked(){ctx.send_viewport_cmd_to(egui::ViewportId::ROOT,Cmd::Visible(true));ctx.send_viewport_cmd_to(egui::ViewportId::ROOT,Cmd::Minimized(false));ctx.send_viewport_cmd_to(egui::ViewportId::ROOT,Cmd::Focus);self.hidden=false;} if ui.small_button("Hide").clicked(){cfg.avatar=false;changed=true;}});
                 });if cfg.avatar_motion{ctx.request_repaint_after(std::time::Duration::from_millis(if state.animated(){33}else{100}));}
             });

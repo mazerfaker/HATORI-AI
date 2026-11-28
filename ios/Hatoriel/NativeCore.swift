@@ -15,7 +15,7 @@ enum CoreFailure: LocalizedError {
     }
 }
 
-struct CoreMood: Codable, Sendable {
+struct CoreMood: Codable, Sendable, Equatable {
     var mood = "Calm"
     var intensity: UInt8 = 0
     var updated: UInt64 = 0

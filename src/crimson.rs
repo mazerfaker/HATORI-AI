@@ -32,13 +32,41 @@ impl State{
   1.+(t*speed).sin()*amp
  }
 }
-pub fn reticle(p:&Painter,c:Pos2,r:f32,t:f32,state:State,motion:bool,mood:u8){
- let t=if motion{t}else{0.};let r=r*state.pulse(t,motion);
- let glow=0.035+f32::from(mood.min(100))*0.00035;
+/// Blended expression channels, ordered joy, concern, surprise, curiosity.
+#[derive(Clone,Copy,Debug,Default,PartialEq)]
+pub struct Expression([f32;4]);
+impl Expression{
+ pub fn target(mood:&hatori_ai::emotion::State,enabled:bool)->Self{
+  use hatori_ai::emotion::Mood;
+  let mut v=[0.;4];if enabled{
+   let i=match mood.mood{Mood::Calm=>None,Mood::Joy=>Some(0),Mood::Concern=>Some(1),Mood::Surprise=>Some(2),Mood::Curiosity=>Some(3)};
+   if let Some(i)=i{v[i]=f32::from(mood.intensity.min(100))/100.;}
+  }Self(v)
+ }
+ pub fn approach(&mut self,target:Self,dt:f32,motion:bool){
+  let a=if motion{1.-(-dt.clamp(0.,0.25)*9.).exp()}else{1.};
+  for (x,y) in self.0.iter_mut().zip(target.0){*x+=a*(y-*x);if (*x-y).abs()<0.001{*x=y;}}
+ }
+ pub fn moving(&self,target:Self)->bool{self.0.iter().zip(target.0).any(|(x,y)|(x-y).abs()>0.001)}
+}
+fn arc(p:&Painter,c:Pos2,r:f32,start:f32,span:f32,stroke:Stroke){
+ let points=(0..=20).map(|i|{let a=start+span*i as f32/20.;c+Vec2::new(a.cos(),a.sin())*r}).collect();
+ p.add(egui::Shape::line(points,stroke));
+}
+pub fn reticle(p:&Painter,c:Pos2,r:f32,t:f32,state:State,motion:bool,expression:Expression){
+ let t=if motion{t}else{0.};let [joy,concern,surprise,curiosity]=expression.0;
+ let scale=1.+0.055*joy-0.045*concern+0.075*surprise;
+ let r=r*scale*state.pulse(t,motion);
+ let glow=0.035+0.075*(joy+concern*0.45+surprise+curiosity*0.65).min(1.);
  for i in 1..=3{p.circle_stroke(c,r,Stroke::new(i as f32*2.,RED.gamma_multiply(glow)));}
  p.circle_stroke(c,r,Stroke::new(2.,RED));
  for i in 0..4{let a=i as f32*std::f32::consts::FRAC_PI_2;let d=Vec2::new(a.cos(),a.sin());p.line_segment([c+d*r*0.68,c+d*r*1.42],Stroke::new(2.,RED));}
- p.circle_filled(c,(r*0.055).max(1.5),RED);
+ p.circle_filled(c,(r*(0.055+0.035*surprise)).max(1.5),RED);
+ // Mood geometry remains inside the activity indicators; all channels fade smoothly.
+ if joy>0.001{p.circle_stroke(c,r*0.80,Stroke::new(1.4,RED.gamma_multiply(joy*0.8)));}
+ if concern>0.001{p.circle_stroke(c,r*0.55,Stroke::new(1.3,RED.gamma_multiply(concern*0.75)));}
+ if surprise>0.001{for i in 0..4{arc(p,c,r*1.16,i as f32*std::f32::consts::FRAC_PI_2+0.32,0.45,Stroke::new(1.6,RED.gamma_multiply(surprise)));}}
+ if curiosity>0.001{let a=t*0.8;for i in 0..2{arc(p,c,r*0.77,a+i as f32*std::f32::consts::PI,0.95,Stroke::new(1.6,RED.gamma_multiply(curiosity*0.85)));}}
  match state{
   State::Thinking|State::Synthesizing|State::Preparing=>{
    let speed=if state==State::Synthesizing{-2.}else{1.5};
@@ -57,4 +85,6 @@ pub fn icon_rgba()->Vec<u8>{
  let mut rgba=Vec::with_capacity(32*32*4);
  for y in 0..32{for x in 0..32{let dx=x as f32-15.5;let dy=y as f32-15.5;let d=(dx*dx+dy*dy).sqrt();let mark=(d-10.).abs()<1.1||(dx.abs()<1.&&dy.abs()>7.&&dy.abs()<15.)||(dy.abs()<1.&&dx.abs()>7.&&dx.abs()<15.)||d<1.8;rgba.extend_from_slice(if mark{&[238,52,52,255]}else{&[0,0,0,0]});}}rgba
 }
-#[cfg(test)]mod tests{use super::*;#[test]fn state_priority(){assert_eq!(State::from_activity(true,true,true,true,true,true),State::Listening);assert_eq!(State::from_activity(false,true,false,false,false,false),State::Preparing);assert_eq!(State::from_activity(false,false,true,true,false,false),State::Responding);assert_eq!(State::from_activity(false,false,false,false,true,true),State::Synthesizing);assert_eq!(State::from_activity(false,false,false,false,false,true),State::Speaking);assert_eq!(State::from_activity(false,false,false,false,false,false),State::Idle);}#[test]fn motion_disabled(){for s in [State::Idle,State::Listening,State::Speaking,State::Thinking]{assert_eq!(s.pulse(100.,false),1.);assert!((0.9..=1.1).contains(&s.pulse(100.,true)));}}#[test]fn icon_has_transparency(){let v=icon_rgba();assert_eq!(v.len(),4096);assert!(v.chunks_exact(4).any(|p|p[3]==255));assert!(v.chunks_exact(4).any(|p|p[3]==0));}}
+#[cfg(test)]mod tests{use super::*;#[test]fn state_priority(){assert_eq!(State::from_activity(true,true,true,true,true,true),State::Listening);assert_eq!(State::from_activity(false,true,false,false,false,false),State::Preparing);assert_eq!(State::from_activity(false,false,true,true,false,false),State::Responding);assert_eq!(State::from_activity(false,false,false,false,true,true),State::Synthesizing);assert_eq!(State::from_activity(false,false,false,false,false,true),State::Speaking);assert_eq!(State::from_activity(false,false,false,false,false,false),State::Idle);}#[test]fn motion_disabled(){for s in [State::Idle,State::Listening,State::Speaking,State::Thinking]{assert_eq!(s.pulse(100.,false),1.);assert!((0.9..=1.1).contains(&s.pulse(100.,true)));}}#[test]fn mood_targets_are_bounded(){use hatori_ai::emotion::{Mood,State as MoodState};let m=MoodState{mood:Mood::Surprise,intensity:255,updated:0};assert_eq!(Expression::target(&m,true).0,[0.,0.,1.,0.]);assert_eq!(Expression::target(&m,false),Expression::default());}
+#[test]fn expression_blends_and_reduced_motion_snaps(){let mut e=Expression([1.,0.,0.,0.]);let target=Expression([0.,1.,0.,0.]);e.approach(target,0.05,true);assert!(e.0[0]>0.&&e.0[1]>0.&&e.moving(target));assert!((e.0.iter().sum::<f32>()-1.).abs()<0.001);for _ in 0..100{e.approach(target,0.05,true);}assert_eq!(e,target);e.approach(Expression::default(),0.,false);assert_eq!(e,Expression::default());}
+#[test]fn icon_has_transparency(){let v=icon_rgba();assert_eq!(v.len(),4096);assert!(v.chunks_exact(4).any(|p|p[3]==255));assert!(v.chunks_exact(4).any(|p|p[3]==0));}}

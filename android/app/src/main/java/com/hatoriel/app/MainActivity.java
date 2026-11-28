@@ -12,6 +12,9 @@ import org.json.*;
 public final class MainActivity extends Activity {
     private final int accent=CrimsonAvatar.RED;
     private CrimsonAvatar avatar;
+    private long nextAvatarMoodRefresh=0;
+    private String avatarMood="Calm";
+    private int avatarIntensity=0;
     private VoiceOutput voice;
     private static final int ATTACH=73, SAVE_TRANSFER=74;
     private FileTransfer transfer;
@@ -63,7 +66,7 @@ public final class MainActivity extends Activity {
     }
     private void render(){
         messages.removeAllViews();welcomeAvatar=null;
-        if(history.length()==0&&active==null){CrimsonAvatar welcome=new CrimsonAvatar(this);welcomeAvatar=welcome;welcome.setMotion(prefs.getBoolean("avatar_motion",true));messages.addView(welcome,new LinearLayout.LayoutParams(-1,dp(160)));TextView greeting=label("Готова до діалогу",20);greeting.setGravity(android.view.Gravity.CENTER);messages.addView(greeting);TextView hint=label("Чим можу допомогти?",14);hint.setGravity(android.view.Gravity.CENTER);messages.addView(hint);}
+        if(history.length()==0&&active==null){CrimsonAvatar welcome=new CrimsonAvatar(this);welcomeAvatar=welcome;welcome.setMotion(prefs.getBoolean("avatar_motion",true));welcome.setMood(avatarMood,avatarIntensity);messages.addView(welcome,new LinearLayout.LayoutParams(-1,dp(160)));TextView greeting=label("Готова до діалогу",20);greeting.setGravity(android.view.Gravity.CENTER);messages.addView(greeting);TextView hint=label("Чим можу допомогти?",14);hint.setGravity(android.view.Gravity.CENTER);messages.addView(hint);}
         for(int i=0;i<history.length();i++){
             JSONObject m=history.optJSONObject(i);if(m==null)continue;
             boolean user="user".equals(m.optString("role"));
@@ -146,6 +149,13 @@ public final class MainActivity extends Activity {
         if(voiceState==null||voice==null)return;
         CrimsonAvatar.State state=CrimsonAvatar.State.select(externalDictation,GenerationSession.active!=null,!GenerationSession.partial.isEmpty(),voice.speaking());
         avatar.setState(state);if(welcomeAvatar!=null)welcomeAvatar.setState(state);
+        long elapsed=android.os.SystemClock.elapsedRealtime();
+        if(elapsed>=nextAvatarMoodRefresh){nextAvatarMoodRefresh=elapsed+1000;avatarMood="Calm";avatarIntensity=0;
+            try{JSONObject opts=memory.options(),mood=opts.optJSONObject("mood");
+                if(opts.optBoolean("emotion_enabled",false)&&mood!=null){long now=System.currentTimeMillis()/1000;long age=Math.max(0,now-Math.min(now,Math.max(0,mood.optLong("updated"))));avatarIntensity=Math.max(0,Math.min(100,mood.optInt("intensity"))-(int)Math.min(100,age/60*5));avatarMood=avatarIntensity==0?"Calm":mood.optString("mood","Calm");}
+            }catch(JSONException ignored){}
+        }
+        avatar.setMood(avatarMood,avatarIntensity);if(welcomeAvatar!=null)welcomeAvatar.setMood(avatarMood,avatarIntensity);
         voiceState.setVisibility(voiceMode?View.VISIBLE:View.GONE);
         if(voiceMode)voiceState.setText(state==CrimsonAvatar.State.IDLE?"Готова до репліки · диктуй, перевір текст, надішли":state.label);
     }
