@@ -1,0 +1,5 @@
+# v0.8.8 Proactive Intelligence
+
+Windows: opt-in rotating check-ins using approved goal/profile and project memories; optional suggestions to reopen previous chats, never automatic generation or external action. A two-minute inactivity gate, configurable 15–1440 minute base interval, lower initiative multiplier, DND, and suppression during generation, speech or dictation reduce interruption. Due reminders are prioritized by due time and offer Done, Snooze 15 minutes, Dismiss. A previous chat is only opened by explicit click. Chat titles do not prove unfinished work. Suggestions run only while the application is running.
+
+Android/iOS: manually snooze existing reminders for 15 minutes; Android notification previews default to generic text with opt-in full text. Existing OS permission and DND policies preserved. iOS keeps its existing generic periodic check-ins; Android has no new periodic project check-in. No exact alarm guarantee or automated task discovery. Tests cover rotation, inactivity, interval, DND, clock rollback, reminder order, snooze, completion and legacy settings. Actual notification delivery and desktop interactions need device testing.

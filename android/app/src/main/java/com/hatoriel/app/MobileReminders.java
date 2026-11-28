@@ -44,6 +44,12 @@ final class MobileReminders {
         if(!prefs(c).edit().putString("rows",rows.toString()).putInt("next_id",id+1).commit())throw new IllegalStateException("Не вдалося зберегти");
         schedule(c);
     }
+    static synchronized void snooze(Context c,int id,int minutes)throws JSONException{
+        if(minutes<1||minutes>10080)throw new IllegalArgumentException("Час 1–10080 хв");
+        JSONArray rows=rows(c);boolean found=false;for(int i=0;i<rows.length();i++){JSONObject row=rows.optJSONObject(i);if(row!=null&&row.optInt("id")==id){row.put("due",System.currentTimeMillis()+minutes*60000L).put("delivered",false);found=true;break;}}
+        if(!found||!prefs(c).edit().putString("rows",rows.toString()).commit())throw new IllegalStateException("Не вдалося відкласти");
+        c.getSystemService(NotificationManager.class).cancel(id);schedule(c);
+    }
     static synchronized void remove(Context c,int id){
         JSONArray rows=rows(c);for(int i=0;i<rows.length();i++){JSONObject row=rows.optJSONObject(i);if(row!=null&&row.optInt("id")==id){rows.remove(i);break;}}
         prefs(c).edit().putString("rows",rows.toString()).commit();c.getSystemService(NotificationManager.class).cancel(id);schedule(c);
@@ -57,7 +63,7 @@ final class MobileReminders {
             JSONObject row=rows.optJSONObject(i);if(row==null||row.optBoolean("delivered")||row.optLong("due",Long.MAX_VALUE)>now)continue;
             int id=row.optInt("id");Intent open=new Intent(c,MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
             PendingIntent content=PendingIntent.getActivity(c,id,open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-            Notification n=new Notification.Builder(c,CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Hatoriel · Нагадування").setContentText(row.optString("text")).setStyle(new Notification.BigTextStyle().bigText(row.optString("text"))).setVisibility(Notification.VISIBILITY_PRIVATE).setContentIntent(content).setAutoCancel(true).build();
+            Notification n=new Notification.Builder(c,CHANNEL).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Hatoriel · Нагадування").setContentText(prefs(c).getBoolean("show_text",false)?row.optString("text"):"У тебе є заплановане нагадування.").setStyle(new Notification.BigTextStyle().bigText(prefs(c).getBoolean("show_text",false)?row.optString("text"):"У тебе є заплановане нагадування.")).setVisibility(Notification.VISIBILITY_PRIVATE).setContentIntent(content).setAutoCancel(true).build();
             try{nm.notify(id,n);row.put("delivered",true);}catch(SecurityException|JSONException e){break;}
         }
         prefs(c).edit().putString("rows",rows.toString()).commit();schedule(c);

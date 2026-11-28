@@ -62,6 +62,7 @@ import UIKit
                         Text(row.text)
                         Text(row.due, format: .dateTime.day().month().hour().minute()).font(.caption)
                         Text(store.isScheduled(row) ? "Заплановано в iOS" : row.due <= Date() ? "Час минув · доставка не підтверджена" : "Не заплановано").font(.caption).foregroundStyle(.secondary)
+                        Button("Відкласти на 15 хв") { Task { await store.snooze(row.id, minutes: 15) } }.buttonStyle(.borderless)
                         Button("Видалити", role: .destructive) { removing = row }.buttonStyle(.borderless)
                     }
                 }

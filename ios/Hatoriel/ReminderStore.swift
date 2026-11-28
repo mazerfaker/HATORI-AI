@@ -99,6 +99,13 @@ struct ReminderPreferences: Codable {
             $0.reminders.append(IOSReminder(id: UUID(), text: value, due: Date().addingTimeInterval(Double(minutes)*60)))
         }
     }
+    func snooze(_ id: UUID, minutes: Int) async {
+        await change(force: true) {
+            guard (1...10080).contains(minutes), let i = $0.reminders.firstIndex(where: { $0.id == id }) else { throw CoreFailure.rejected("Нагадування не знайдено або некоректний час.") }
+            let old = $0.reminders[i]
+            $0.reminders[i] = IOSReminder(id: old.id, text: old.text, due: Date().addingTimeInterval(Double(minutes)*60))
+        }
+    }
     func remove(_ id: UUID) async { await change { $0.reminders.removeAll { $0.id == id } } }
     private func change(force: Bool = false, _ edit: (inout ReminderPreferences) throws -> Void) async {
         guard !working, storageError == nil else { return }
