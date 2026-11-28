@@ -38,6 +38,7 @@ impl Policy{
  pub fn start(&mut self,now:Instant){self.started=Some(now);self.mask=Category::Status.bit();}
  pub fn stop(&mut self){self.started=None;self.mask=0;}
  pub fn remaining(&self,now:Instant)->Duration{self.started.map(|t|SESSION_TTL.saturating_sub(now.saturating_duration_since(t))).unwrap_or_default()}
+ pub fn deadline(&self)->Option<Instant>{self.started.map(|t|t+SESSION_TTL)}
  pub fn active(&self,now:Instant)->bool{!self.remaining(now).is_zero()}
  pub fn granted(&self,c:Category,now:Instant)->bool{self.active(now)&&self.mask&c.bit()!=0}
  pub fn set(&mut self,c:Category,value:bool,now:Instant)->Result<(),String>{

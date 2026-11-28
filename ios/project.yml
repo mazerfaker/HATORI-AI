@@ -5,8 +5,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.7.8"
-    CURRENT_PROJECT_VERSION: "79"
+    MARKETING_VERSION: "0.7.9"
+    CURRENT_PROJECT_VERSION: "80"
 targets:
   Hatoriel:
     type: application

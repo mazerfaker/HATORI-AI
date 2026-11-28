@@ -163,9 +163,10 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Отримати оригінал файлу?").setMessage("Запит до "+server+". Код одноразовий; файл перевіряється за SHA-256 перед збереженням.").setNegativeButton("Скасувати",null).setPositiveButton("Отримати",(d,w)->{
             if(transfer!=null||!base.equals(server)||!bridgeKey.equals(key))return;
             FileTransfer job=new FileTransfer();transfer=job;transferStatus.setText("Отримання…");
-            new Thread(()->{FileTransfer.Received result=null;String error=null;try{result=job.receive(server,key,code,p->runOnUiThread(()->{if(!destroyed&&transfer==job)transferStatus.setText("Отримання "+p+"%");}));}catch(Exception e){error=e.getMessage();}
+            new Thread(()->{FileTransfer.Received result=null;String error=null;try{result=job.receive(server,key,code,p->runOnUiThread(()->{if(!destroyed&&transfer==job&&!job.isCancelled())transferStatus.setText("Отримання "+p+"%");}));}catch(Exception e){error=e.getMessage();}
                 final FileTransfer.Received file=result;final String failure=error;runOnUiThread(()->{if(destroyed||transfer!=job)return;transfer=null;
-                    if(file==null||!base.equals(server)||!bridgeKey.equals(key)){transferStatus.setText("Передавання не завершено: "+failure);return;}
+                    if(job.isCancelled()||!foreground){transferStatus.setText("Отримання скасовано");return;}
+                    if(file==null||!base.equals(server)||!bridgeKey.equals(key)||!bridgeEndpoint.equals(server)){transferStatus.setText("Передавання не завершено: "+failure);return;}
                     receivedTransfer=file;transferStatus.setText("SHA-256 перевірено: "+file.name);
                     android.content.Intent i=new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);i.setType("application/octet-stream");i.addCategory(android.content.Intent.CATEGORY_OPENABLE);i.putExtra(android.content.Intent.EXTRA_TITLE,file.name);
                     try{startActivityForResult(i,SAVE_TRANSFER);}catch(android.content.ActivityNotFoundException e){receivedTransfer=null;transferStatus.setText("Збереження недоступне");}
@@ -356,7 +357,7 @@ public final class MainActivity extends Activity {
         refresh.run();new AlertDialog.Builder(this).setTitle("Hardware & Model Manager").setView(sv).setPositiveButton("Закрити",null).show();
     }
     @Override protected void onResume(){super.onResume();foreground=true;syncSession();sessionHandler.removeCallbacks(sessionWatch);sessionHandler.post(sessionWatch);MobileReminders.channel(this);MobileReminders.schedule(this);}
-    @Override protected void onPause(){foreground=false;voiceReplyJob=null;sessionHandler.removeCallbacks(sessionWatch);if(voice!=null)voice.stop();super.onPause();}
+    @Override protected void onPause(){foreground=false;if(transfer!=null)transfer.cancel();voiceReplyJob=null;sessionHandler.removeCallbacks(sessionWatch);if(voice!=null)voice.stop();super.onPause();}
     @Override protected void onStop(){if(!GenerationSession.background&&!isChangingConfigurations())GenerationSession.cancel();super.onStop();}
     @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){super.onRequestPermissionsResult(request,permissions,results);if(request==45){MobileReminders.schedule(this);if(!MobileReminders.permitted(this))Toast.makeText(this,"Сповіщення не дозволено",Toast.LENGTH_LONG).show();}}
     private void showReminders(){

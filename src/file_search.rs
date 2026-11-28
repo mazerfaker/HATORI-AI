@@ -29,18 +29,21 @@ fn matches_metadata(f:&Filter,path:&Path,size:u64,modified:Option<SystemTime>,no
  if f.recent_days>0&&!modified.and_then(|m|now.duration_since(m).ok()).is_some_and(|d|d<=Duration::from_secs(u64::from(f.recent_days)*86400)){return false;}
  true
 }
-pub fn search(scopes:&Scopes,root:&Path,f:&Filter,cancel:&AtomicBool)->Result<Report,String>{
+#[cfg(test)]
+pub fn search(scopes:&Scopes,root:&Path,f:&Filter,cancel:&AtomicBool)->Result<Report,String>{search_until(scopes,root,f,cancel,Instant::now()+Duration::from_secs(60))}
+pub fn search_until(scopes:&Scopes,root:&Path,f:&Filter,cancel:&AtomicBool,deadline:Instant)->Result<Report,String>{
+ if cancel.load(Ordering::Relaxed)||Instant::now()>=deadline{return Ok(Report{cancelled:true,..Default::default()});}
  f.validate()?;let root=scopes.checked(root)?;
  if !root.is_dir(){return Err("Search root must be a folder".into());}
  let start=Instant::now();let now=SystemTime::now();let needle=f.content.trim().to_lowercase();
  let mut report=Report::default();let mut dirs=vec![root];
  'scan:while let Some(dir)=dirs.pop(){
-  if cancel.load(Ordering::Relaxed){report.cancelled=true;break;}
+  if cancel.load(Ordering::Relaxed)||Instant::now()>=deadline{report.cancelled=true;break;}
   if start.elapsed()>=TIME_LIMIT{report.limited=true;break;}
   if scopes.checked(&dir).is_err(){report.skipped+=1;continue;}
   let rows=match fs::read_dir(&dir){Ok(r)=>r,Err(_)=>{report.skipped+=1;continue;}};
   for row in rows{
-   if cancel.load(Ordering::Relaxed){report.cancelled=true;break 'scan;}
+   if cancel.load(Ordering::Relaxed)||Instant::now()>=deadline{report.cancelled=true;break 'scan;}
    if report.scanned>=SCAN_LIMIT||report.hits.len()>=RESULT_LIMIT||start.elapsed()>=TIME_LIMIT{report.limited=true;break 'scan;}
    report.scanned+=1;
    let Ok(row)=row else{report.skipped+=1;continue;};
@@ -51,6 +54,7 @@ pub fn search(scopes:&Scopes,root:&Path,f:&Filter,cancel:&AtomicBool)->Result<Re
    if !matches_metadata(f,&path,meta.len(),modified,now){continue;}
    if !needle.is_empty(){
     if report.text_reads>=TEXT_LIMIT{report.limited=true;break 'scan;}
+    if cancel.load(Ordering::Relaxed)||Instant::now()>=deadline{report.cancelled=true;break 'scan;}
     report.text_reads+=1;
     if !scopes.read_text(&path).is_ok_and(|t|t.to_lowercase().contains(&needle)){continue;}
    }
@@ -58,7 +62,7 @@ pub fn search(scopes:&Scopes,root:&Path,f:&Filter,cancel:&AtomicBool)->Result<Re
    report.hits.push(Hit{path,bytes:meta.len(),modified:modified.and_then(|m|m.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d|d.as_secs())});
   }
  }
- if cancel.load(Ordering::Relaxed){report.cancelled=true;}
+ if cancel.load(Ordering::Relaxed)||Instant::now()>=deadline{report.cancelled=true;report.hits.clear();}
  report.hits.sort_by(|a,b|b.modified.cmp(&a.modified).then(a.path.cmp(&b.path)));
  Ok(report)
 }
@@ -71,6 +75,7 @@ pub fn search(scopes:&Scopes,root:&Path,f:&Filter,cancel:&AtomicBool)->Result<Re
   assert!(!matches_metadata(&f,Path::new("Звіт.pdf"),3000,Some(now),now));
   assert!(!matches_metadata(&f,Path::new("Звіт.pdf"),1500,Some(now-Duration::from_secs(172800)),now));
  }
+ #[test]fn expired_search_never_reads_root(){let scopes=Scopes::default();let report=search_until(&scopes,Path::new("not-granted"),&Filter::default(),&AtomicBool::new(false),Instant::now()).unwrap();assert!(report.cancelled);assert!(report.hits.is_empty());assert_eq!(report.scanned,0);}
  #[test]fn invalid_filters(){assert!(Filter{min_kib:5,max_kib:3,..Default::default()}.validate().is_err());assert!(Filter{extension:"../pdf".into(),..Default::default()}.validate().is_err());}
  #[test]fn scoped_search(){
   let mut id=[0u8;16];getrandom::getrandom(&mut id).unwrap();let name=id.iter().map(|b|format!("{b:02x}")).collect::<String>();

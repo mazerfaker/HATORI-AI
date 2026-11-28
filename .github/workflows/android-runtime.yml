@@ -49,6 +49,13 @@ jobs:
       - name: Build ARM64 runtime
         shell: bash
         run: bash android/runtime/build-llama.sh
+      - name: Verify ARM64 runtime artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s android/runtime/out/llama-server
+          test -s android/runtime/out/llama.cpp-LICENSE
+          file android/runtime/out/llama-server | grep -E 'ELF 64-bit.*ARM aarch64'
       - uses: actions/upload-artifact@v5
         with:
           name: Hatoriel-Android-Llama-Runtime-Preview

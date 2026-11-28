@@ -12,6 +12,7 @@ final class FileTransfer {
     }
     private volatile HttpURLConnection connection;
     private volatile boolean cancelled;
+    boolean isCancelled(){return cancelled;}
     void cancel(){cancelled=true;HttpURLConnection c=connection;if(c!=null)new Thread(c::disconnect,"hatoriel-transfer-cancel").start();}
     Received receive(String base,String key,String code,java.util.function.IntConsumer progress)throws Exception{
         URL chat=ChatTransport.endpoint(base);
@@ -36,7 +37,7 @@ final class FileTransfer {
             byte[] data=out.toByteArray();if(cancelled||data.length!=size)throw new IOException("Incomplete transfer");
             byte[] digest=MessageDigest.getInstance("SHA-256").digest(data);StringBuilder hex=new StringBuilder();for(byte b:digest)hex.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
             if(!hash.equals(hex.toString()))throw new IOException("SHA-256 mismatch");
-            progress.accept(100);return new Received(name,data);
+            if(cancelled)throw new InterruptedIOException("Cancelled");progress.accept(100);return new Received(name,data);
         }finally{c.disconnect();connection=null;}
     }
 }

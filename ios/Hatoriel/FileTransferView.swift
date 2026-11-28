@@ -12,6 +12,7 @@ struct ReceivedFile: FileDocument {
 
 struct FileTransferView: View {
     @ObservedObject var chat: ChatStore
+    @Environment(\.scenePhase) private var scenePhase
     @State private var code = ""
     @State private var status = "Оригінал файлу · до 8 МіБ"
     @State private var task: Task<Void,Never>?
@@ -40,6 +41,7 @@ struct FileTransferView: View {
                 file = nil
             }
             .onChange(of: exporting) { value in if !value { file = nil } }
+            .onChange(of: scenePhase) { phase in if phase != .active { task?.cancel(); code = "" } }
             .onDisappear { task?.cancel(); code = "" }
     }
 }

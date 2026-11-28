@@ -211,7 +211,11 @@ struct ChatEntry: Codable, Identifiable {
         guard desktopMode && !busy && !checkingConnection else { throw CoreFailure.rejected("Підключи шлюз ПК") }
         checkingConnection = true
         defer { checkingConnection = false }
-        return try await ChatTransport.receiveFile(base: endpoint, key: sessionKey, code: code, progress: progress)
+        let server = endpoint, key = sessionKey
+        let result = try await ChatTransport.receiveFile(base: server, key: key, code: code, progress: progress)
+        try Task.checkCancellation()
+        guard endpoint == server, sessionKey == key, desktopMode else { throw CoreFailure.rejected("Підключення змінилося") }
+        return result
     }
     func forgetDesktopKey() {
         guard !busy && !checkingConnection else { return }
