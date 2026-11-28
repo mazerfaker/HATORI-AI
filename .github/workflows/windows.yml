@@ -8,12 +8,20 @@ concurrency:
   cancel-in-progress: true
 permissions:
   contents: read
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify Node.js 24
+        run: node -e "if (process.versions.node.split('.')[0] !== '24') process.exit(1); console.log(process.version)"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --no-default-features --lib

@@ -25,6 +25,7 @@ mod app_control;
 mod screen_awareness;
 mod clipboard_intelligence;
 mod desktop_automation;
+mod action_permissions;
 use hatori_ai::{core, memory_suggest, proactive, emotion, adaptive, memory_core, model_manager, inference::{Backend, Ollama, Message}, llama_backend::Llama};
 use serde::{Serialize, Deserialize};
 use std::{sync::mpsc, time::Duration};

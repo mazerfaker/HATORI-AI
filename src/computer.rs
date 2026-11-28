@@ -2,6 +2,7 @@
 use std::{path::{Path,PathBuf},time::{Duration,Instant}};
 use eframe::egui;
 use rusqlite::{Connection,params};
+use crate::action_permissions::{self as permissions,Category,Policy};
 const TTL:Duration=Duration::from_secs(60);
 const MAX_AUDIT:usize=200;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -29,20 +30,22 @@ impl Action{
 #[derive(Clone,Debug)]
 struct Proposal{action:Action,target:Option<PathBuf>,created:Instant}
 #[derive(Default)]
-struct Gate{enabled:bool,pending:Option<Proposal>}
+struct Gate{enabled:bool,pending:Option<Proposal>,policy:Policy}
 impl Gate{
- fn enable(&mut self,value:bool){self.enabled=value;if !value{self.pending=None;}}
+ fn enable(&mut self,value:bool){self.enabled=value;self.pending=None;if value{self.policy.start(Instant::now());}else{self.policy.stop();}}
+ fn allowed(&self,action:Action,now:Instant)->bool{self.enabled&&self.policy.allows(action,now)}
  fn cancel(&mut self){self.pending=None;}
  fn expire(&mut self,now:Instant){if self.pending.as_ref().is_some_and(|p|now.saturating_duration_since(p.created)>=TTL){self.cancel();}}
  fn propose(&mut self,action:Action,target:Option<PathBuf>,now:Instant)->Result<(),String>{
-  if !self.enabled{return Err("Computer interaction disabled".into());}
+  if !self.allowed(action,now){return Err("Action category not permitted or session expired / Категорію не дозволено".into());}
   if self.pending.is_some(){return Err("Resolve the existing proposal first".into());}
   if (!matches!(action,Action::InspectStatus|Action::CaptureScreen|Action::ReadClipboardText|Action::ReadClipboardImage|Action::WriteClipboardText))!=target.is_some(){return Err("Invalid action target".into());}
   self.pending=Some(Proposal{action,target,created:now});Ok(())
  }
  fn approve(&mut self,now:Instant)->Result<Proposal,String>{
   if !self.enabled{self.cancel();return Err("Permission revoked".into());}
-  self.expire(now);self.pending.take().ok_or_else(||"No active proposal (expired or already used)".into())
+  self.expire(now);let p=self.pending.take().ok_or_else(||"No active proposal (expired or already used)".to_string())?;
+  if !self.allowed(p.action,now){return Err("Action permission revoked or expired".into());}Ok(p)
  }
 }
 fn migrate(db:&Connection)->rusqlite::Result<()>{
@@ -98,6 +101,7 @@ impl Computer{
  fn cancel_search(&mut self){if let Some(j)=&self.search_job{j.cancel.store(true,std::sync::atomic::Ordering::Relaxed);}self.search_report=None;}
  pub fn poll(&mut self,db:Option<&Connection>,transfers:&crate::file_transfer::Store){
   self.apps.poll();
+  if self.gate.enabled&&(!self.gate.policy.active(Instant::now())||db.is_none()){self.revoke_all(transfers);self.status="Permission session expired or audit unavailable / Сеанс завершено".into();}
   let result=match self.search_job.as_ref().map(|j|j.rx.try_recv()){Some(Ok(r))=>r,Some(Err(std::sync::mpsc::TryRecvError::Disconnected))=>Err("Search worker disconnected".into()),_=>return};
   let job=self.search_job.take().unwrap();let cancelled=job.cancel.load(std::sync::atomic::Ordering::Relaxed)||result.as_ref().is_ok_and(|r|r.cancelled);
   let outcome=if cancelled{"cancelled"}else if result.is_ok(){"completed"}else{"failed"};
@@ -115,6 +119,11 @@ impl Computer{
  pub fn screen_feedback(&mut self,message:String){self.status=message;}
  fn clear_clipboard(&mut self){self.clipboard=None;self.clipboard_attach=false;self.clipboard_write.clear();self.clipboard_pending=None;}
  pub fn clipboard_for_chat(&mut self)->Option<(&'static str,Vec<u8>,bool)>{if !std::mem::take(&mut self.clipboard_attach){return None;}self.clipboard.as_ref().map(|s|{let (n,b)=s.attachment();(n,b,s.is_image())})}
+ fn revoke_all(&mut self,transfers:&crate::file_transfer::Store){self.gate.enable(false);transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}
+ fn change_category(&mut self,c:Category,value:bool,transfers:&crate::file_transfer::Store)->Result<(),String>{
+  self.gate.policy.set(c,value,Instant::now())?;self.gate.cancel();self.workflow.stop("Permission changed / Дозволи змінено");self.search_pending=None;self.clipboard_pending=None;self.cancel_search();
+  if !value{match c{Category::Files=>{self.scopes.clear();self.current=None;self.entries.clear();self.preview=None;transfers.clear();},Category::Apps=>self.apps.clear(),Category::Screen=>{self.screen=None;self.screen_attach=false;},Category::ClipboardRead|Category::ClipboardWrite=>self.clear_clipboard(),Category::Transfer=>transfers.clear(),Category::Status=>{}}}Ok(())
+ }
  fn clear_view(&mut self){self.workflow.stop("Workflow cleared / План очищено");self.clear_clipboard();self.screen=None;self.screen_attach=false;self.current=None;self.entries.clear();self.preview=None;self.search_pending=None;self.cancel_search();}
  fn request(&mut self,action:Action,target:PathBuf){match self.gate.propose(action,Some(target),Instant::now()){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}}
  pub fn panel(&mut self,ui:&mut egui::Ui,db:Option<&Connection>,busy:bool,en:bool,backend:&str,model:&str,bridge:bool,transfers:&crate::file_transfer::Store){
@@ -124,8 +133,22 @@ impl Computer{
   ui.label(if en{"Local, manual requests only. No AI-generated commands, remote requests or file modifications. Only explicitly granted folders."}else{"Лише локальні ручні запити. Без команд від ШІ, віддалених дій або зміни файлів. Лише дозволені папки."});
   let mut enabled=self.gate.enabled;
   if ui.checkbox(&mut enabled,if en{"Enable actions for this session"}else{"Дозволити дії в поточному сеансі"}).changed(){self.gate.enable(enabled);if !enabled{transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}self.status=if enabled{"Session permission granted / Дозвіл надано".into()}else{"Permission revoked / Дозвіл відкликано".into()};}
+  ui.separator();ui.heading(if en{"Permission & Action Manager"}else{"Керування дозволами"});
+  ui.small("30-minute session; status only by default. Each category and each action need explicit approval. / Сеанс 30 хвилин; за замовчуванням лише стан.");
+  if self.gate.enabled{
+   let remaining=self.gate.policy.remaining(Instant::now()).as_secs();
+   ui.label(format!("{}:{:02} · session remaining / Залишок сеансу",remaining/60,remaining%60));
+   let mut change=None;
+   for c in Category::ALL{
+    let mut value=self.gate.policy.granted(c,Instant::now());
+    if ui.add_enabled(!busy&&db.is_some(),egui::Checkbox::new(&mut value,c.label(en))).changed(){change=Some((c,value));}
+   }
+   if let Some((c,value))=change{match self.change_category(c,value,transfers){Ok(())=>self.status="Category permission updated / Дозвіл оновлено".into(),Err(e)=>self.status=e}}
+   ui.small("Transfer also requires file access. Revoking a category clears its pending data; completed actions cannot be undone.");
+  }
+  if ui.add_enabled(self.gate.enabled,egui::Button::new("REVOKE ALL / ВІДКЛИКАТИ ВСІ")).clicked(){self.revoke_all(transfers);self.status="All permissions revoked / Усі дозволи відкликано".into();}
   if busy{self.workflow.stop("Workflow stopped: chat busy / Чат зайнятий");self.clear_clipboard();self.screen=None;self.screen_attach=false;self.gate.cancel();self.search_pending=None;self.cancel_search();}
-  if !bridge||!self.gate.enabled{transfers.clear();}
+  if !bridge||!self.gate.allowed(Action::OfferFile,Instant::now()){transfers.clear();}
   if db.is_none(){self.workflow.stop("Workflow blocked: audit unavailable");self.clear_clipboard();self.screen=None;self.screen_attach=false;transfers.clear();ui.label("Action journal unavailable. Execution blocked / Журнал недоступний. Дії заблоковані.");self.gate.cancel();}
   if self.workflow.active(){
    if !self.gate.enabled||busy||db.is_none(){self.workflow.stop("Permission unavailable");self.gate.cancel();}
@@ -299,7 +322,7 @@ impl Computer{
   if let Some((path,text))=&self.preview{ui.label(path.display().to_string());egui::ScrollArea::vertical().id_salt("computer-file-preview").max_height(180.).show(ui,|ui|{ui.label(text);});if ui.button("Close preview / Закрити").clicked(){self.preview=None;}}
   if let Some(p)=self.gate.pending.as_ref(){
    ui.separator();ui.label(egui::RichText::new("REVIEW / ПІДТВЕРДЖЕННЯ").color(crate::crimson::RED).strong());
-   ui.label(p.action.label(en));
+   ui.label(p.action.label(en));ui.small(format!("{} · {}",permissions::category(p.action).label(en),permissions::risk(p.action,en)));
    if let Some(path)=&p.target{ui.label(path.display().to_string());ui.small(match p.action{Action::OpenData=>"Opens Explorer, no content read.",Action::GrantFolder=>"Grants read-only access for this session, not automatic scanning.",Action::ListFolder=>"Lists at most 200 immediate entries, no recursion.",Action::ReadText=>"Reads at most 64 KiB of supported plain text, displayed locally.",Action::Search=>"Recursive scan: up to 4000 entries, 200 results, 64 text reads, cooperative 5s limit. No upload.",Action::OfferFile=>"Creates a memory-only copy of the original file for one authenticated HTTPS download within 120 seconds. Not bound to one device; protect both codes.",Action::RegisterApp=>"Trust this specific executable for this session. Its SHA-256 will be recorded in memory; only choose software you trust.",Action::LaunchApp=>"Launch this executable without arguments. It runs with your user permissions and can act independently. No sandbox or elevation request.",_=>""});}
    else if matches!(p.action,Action::ReadClipboardText|Action::ReadClipboardImage){ui.small("Read the current clipboard once. Private content may be displayed locally. Nothing sent to a model.");}
    else if p.action==Action::WriteClipboardText{ui.small("Replace current clipboard with the exact reviewed text below. Windows clipboard history/sync may retain it.");if let Some(text)=&self.clipboard_pending{egui::ScrollArea::vertical().id_salt("clipboard-write-review").max_height(180.).show(ui,|ui|{ui.label(text);});}}
@@ -310,9 +333,9 @@ impl Computer{
    let mut approve=false;let mut cancel=false;let mut queue=false;
    let step=crate::desktop_automation::Step::new(p.action,p.target.clone(),if p.action==Action::Search{self.search_pending.clone()}else{None},if p.action==Action::WriteClipboardText{self.clipboard_pending.clone()}else{None});
    ui.horizontal(|ui|{
-    approve=ui.add_enabled(!busy&&self.gate.enabled&&db.is_some()&&(p.action!=Action::OfferFile||bridge),egui::Button::new("Confirm once / Підтвердити один раз")).clicked();
+    approve=ui.add_enabled(!busy&&self.gate.allowed(p.action,Instant::now())&&db.is_some()&&(p.action!=Action::OfferFile||bridge),egui::Button::new("Confirm once / Підтвердити один раз")).clicked();
     cancel=ui.button("Cancel / Скасувати").clicked();
-    if !self.workflow.active(){queue=ui.add_enabled(!busy&&self.gate.enabled&&db.is_some()&&step.is_ok()&&self.workflow.steps().len()<crate::desktop_automation::MAX_STEPS,egui::Button::new("Add to workflow / Додати до плану")).clicked();}
+    if !self.workflow.active(){queue=ui.add_enabled(!busy&&self.gate.allowed(p.action,Instant::now())&&db.is_some()&&step.is_ok()&&self.workflow.steps().len()<crate::desktop_automation::MAX_STEPS,egui::Button::new("Add to workflow / Додати до плану")).clicked();}
    });
    if cancel{self.workflow.stop("Step cancelled / Крок скасовано");self.gate.cancel();self.clipboard_pending=None;self.search_pending=None;self.status="Cancelled / Скасовано".into();}
    else if queue{match step.and_then(|s|self.workflow.add(s)){Ok(())=>{self.gate.cancel();self.clipboard_pending=None;self.search_pending=None;self.status="Step added without execution / Крок додано без виконання".into();},Err(e)=>self.status=e}}
@@ -369,9 +392,10 @@ impl Computer{
 #[cfg(test)]mod tests{
  use super::*;
  #[test]fn permission_one_shot(){let now=Instant::now();let mut g=Gate::default();assert!(g.propose(Action::InspectStatus,None,now).is_err());g.enable(true);g.propose(Action::InspectStatus,None,now).unwrap();assert!(g.propose(Action::InspectStatus,None,now).is_err());assert_eq!(g.approve(now).unwrap().action,Action::InspectStatus);assert!(g.approve(now).is_err());}
- #[test]fn expiry_revocation_and_target(){let now=Instant::now();let mut g=Gate::default();g.enable(true);assert!(g.propose(Action::OpenData,None,now).is_err());g.propose(Action::OpenData,Some(PathBuf::from("approved")),now).unwrap();assert!(g.approve(now+TTL).is_err());g.propose(Action::InspectStatus,None,now).unwrap();g.enable(false);assert!(g.approve(now).is_err());}
- #[test]fn screen_confirmation_is_one_shot(){let now=Instant::now();let mut g=Gate::default();assert!(g.propose(Action::CaptureScreen,None,now).is_err());g.enable(true);assert!(g.propose(Action::CaptureScreen,Some(PathBuf::from("invalid")),now).is_err());g.propose(Action::CaptureScreen,None,now).unwrap();assert_eq!(g.approve(now).unwrap().action,Action::CaptureScreen);assert!(g.approve(now).is_err());}
- #[test]fn clipboard_actions_require_one_shot(){let now=Instant::now();let mut g=Gate::default();for action in [Action::ReadClipboardText,Action::ReadClipboardImage,Action::WriteClipboardText]{assert!(g.propose(action,None,now).is_err());}g.enable(true);for action in [Action::ReadClipboardText,Action::ReadClipboardImage,Action::WriteClipboardText]{assert!(g.propose(action,Some(PathBuf::from("invalid")),now).is_err());g.propose(action,None,now).unwrap();assert_eq!(g.approve(now).unwrap().action,action);assert!(g.approve(now).is_err());}}
+ #[test]fn expiry_revocation_and_target(){let mut g=Gate::default();g.enable(true);let now=Instant::now();g.policy.set(Category::Files,true,now).unwrap();assert!(g.propose(Action::OpenData,None,now).is_err());g.propose(Action::OpenData,Some(PathBuf::from("approved")),now).unwrap();assert!(g.approve(now+TTL).is_err());g.propose(Action::InspectStatus,None,now).unwrap();g.enable(false);assert!(g.approve(now).is_err());}
+ #[test]fn screen_confirmation_is_one_shot(){let now=Instant::now();let mut g=Gate::default();assert!(g.propose(Action::CaptureScreen,None,now).is_err());g.enable(true);g.policy.set(Category::Screen,true,Instant::now()).unwrap();assert!(g.propose(Action::CaptureScreen,Some(PathBuf::from("invalid")),now).is_err());g.propose(Action::CaptureScreen,None,now).unwrap();assert_eq!(g.approve(now).unwrap().action,Action::CaptureScreen);assert!(g.approve(now).is_err());}
+ #[test]fn clipboard_actions_require_one_shot(){let now=Instant::now();let mut g=Gate::default();for action in [Action::ReadClipboardText,Action::ReadClipboardImage,Action::WriteClipboardText]{assert!(g.propose(action,None,now).is_err());}g.enable(true);g.policy.set(Category::ClipboardRead,true,Instant::now()).unwrap();g.policy.set(Category::ClipboardWrite,true,Instant::now()).unwrap();for action in [Action::ReadClipboardText,Action::ReadClipboardImage,Action::WriteClipboardText]{assert!(g.propose(action,Some(PathBuf::from("invalid")),now).is_err());g.propose(action,None,now).unwrap();assert_eq!(g.approve(now).unwrap().action,action);assert!(g.approve(now).is_err());}}
+ #[test]fn category_rechecked_at_approval(){let mut g=Gate::default();g.enable(true);let now=Instant::now();assert!(g.propose(Action::CaptureScreen,None,now).is_err());g.policy.set(Category::Screen,true,now).unwrap();g.propose(Action::CaptureScreen,None,now).unwrap();g.policy.set(Category::Screen,false,now).unwrap();assert!(g.approve(now).is_err());assert!(g.pending.is_none());}
  #[test]fn journal_bounds(){let db=Connection::open_in_memory().unwrap();for _ in 0..MAX_AUDIT+3{let id=begin(&db,Action::InspectStatus).unwrap();finish(&db,id,"completed").unwrap();}let count:i64=db.query_row("SELECT COUNT(*) FROM computer_audit",[],|r|r.get(0)).unwrap();assert_eq!(count,MAX_AUDIT as i64);let rows=recent(&db).unwrap();assert_eq!(rows.len(),30);assert_eq!(rows[0].1,"inspect_status");assert_eq!(rows[0].2,"completed");}
  #[test]fn audit_fail_closed(){let db=Connection::open_in_memory().unwrap();db.execute_batch("CREATE TABLE computer_audit(wrong INTEGER);").unwrap();assert!(begin(&db,Action::InspectStatus).is_err());}
 }
