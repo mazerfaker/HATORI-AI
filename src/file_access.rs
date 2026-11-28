@@ -6,9 +6,9 @@ const MAX_TEXT:usize=64*1024;
 const MAX_DEPTH:usize=24;
 #[derive(Clone,Debug)]
 pub struct Entry{pub path:PathBuf,pub name:String,pub dir:bool,pub bytes:u64}
-#[derive(Default)]
+#[derive(Default,Clone)]
 pub struct Scopes{roots:Vec<PathBuf>}
-fn ordinary(meta:&fs::Metadata)->bool{
+pub(crate) fn ordinary(meta:&fs::Metadata)->bool{
  if meta.file_type().is_symlink(){return false;}
  #[cfg(windows)]{
   use std::os::windows::fs::MetadataExt;

@@ -1,6 +1,6 @@
 [package]
 name = "hatori_ai"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 [features]
 default = ["desktop"]

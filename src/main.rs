@@ -19,6 +19,7 @@ mod attachments;
 mod documents;
 mod computer;
 mod file_access;
+mod file_search;
 use hatori_ai::{core, memory_suggest, proactive, emotion, adaptive, memory_core, model_manager, inference::{Backend, Ollama, Message}, llama_backend::Llama};
 use serde::{Serialize, Deserialize};
 use std::{sync::mpsc, time::Duration};
@@ -229,6 +230,7 @@ fn refresh(&self){let native=self.config.native_backend;let tx=self.tx.clone();s
 }
 impl eframe::App for App {fn update(&mut self,ctx:&egui::Context,_:&mut eframe::Frame){
  if self.page!=7||ctx.input(|i|i.viewport().focused==Some(false)){self.computer.leave();}
+ self.computer.poll(self.db.as_ref());
  self.speech.poll();
  if self.page!=0||self.busy{self.vision_confirm=false;}
  if self.page==0&&!self.busy&&!self.speech.active(){

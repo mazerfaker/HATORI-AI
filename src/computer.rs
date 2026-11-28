@@ -5,9 +5,9 @@ use rusqlite::{Connection,params};
 const TTL:Duration=Duration::from_secs(60);
 const MAX_AUDIT:usize=200;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText}
+enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText,Search}
 impl Action{
- fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data",Self::GrantFolder=>"grant_folder",Self::ListFolder=>"list_folder",Self::ReadText=>"read_text"}}
+ fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data",Self::GrantFolder=>"grant_folder",Self::ListFolder=>"list_folder",Self::ReadText=>"read_text",Self::Search=>"search_files"}}
  fn label(self,en:bool)->&'static str{match (self,en){
   (Self::InspectStatus,true)=>"Inspect local application status",
   (Self::InspectStatus,false)=>"Переглянути локальний стан застосунку",
@@ -16,6 +16,7 @@ impl Action{
   (Self::GrantFolder,true)=>"Grant read-only folder access", (Self::GrantFolder,false)=>"Дозволити читання папки",
   (Self::ListFolder,true)=>"List granted folder", (Self::ListFolder,false)=>"Переглянути вміст папки",
   (Self::ReadText,true)=>"Preview local text file", (Self::ReadText,false)=>"Прочитати текстовий файл",
+  (Self::Search,true)=>"Search granted folder",(Self::Search,false)=>"Знайти файли в дозволеній папці",
  }}
 }
 #[derive(Clone,Debug)]
@@ -79,11 +80,29 @@ fn open_data(target:&Path)->Result<String,String>{
 }
 #[cfg(not(windows))]
 fn open_data(_: &Path)->Result<String,String>{Err("Explorer action is Windows only".into())}
+struct SearchJob{
+ id:i64,cancel:std::sync::Arc<std::sync::atomic::AtomicBool>,
+ rx:std::sync::mpsc::Receiver<Result<crate::file_search::Report,String>>,
+}
 #[derive(Default)]
-pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>}
+pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>,filter:crate::file_search::Filter,search_pending:Option<crate::file_search::Filter>,search_job:Option<SearchJob>,search_report:Option<crate::file_search::Report>}
 impl Computer{
- pub fn leave(&mut self){self.gate.cancel();self.preview=None;}
- fn clear_view(&mut self){self.current=None;self.entries.clear();self.preview=None;}
+ pub fn leave(&mut self){self.gate.cancel();self.preview=None;self.search_pending=None;self.cancel_search();}
+ fn cancel_search(&mut self){if let Some(j)=&self.search_job{j.cancel.store(true,std::sync::atomic::Ordering::Relaxed);}self.search_report=None;}
+ pub fn poll(&mut self,db:Option<&Connection>){
+  let result=match self.search_job.as_ref().map(|j|j.rx.try_recv()){Some(Ok(r))=>r,Some(Err(std::sync::mpsc::TryRecvError::Disconnected))=>Err("Search worker disconnected".into()),_=>return};
+  let job=self.search_job.take().unwrap();let cancelled=job.cancel.load(std::sync::atomic::Ordering::Relaxed)||result.as_ref().is_ok_and(|r|r.cancelled);
+  let outcome=if cancelled{"cancelled"}else if result.is_ok(){"completed"}else{"failed"};
+  if db.is_none_or(|d|finish(d,job.id,outcome).is_err()){self.status="Search audit completion failed; permissions revoked".into();self.gate.enable(false);self.scopes.clear();self.clear_view();return;}
+  if cancelled{self.status="Search cancelled / Пошук скасовано".into();return;}
+  match result{Ok(r)=>{self.status=format!("{} matches · {} scanned · {} text reads{}",r.hits.len(),r.scanned,r.text_reads,if r.limited{" · partial results"}else{""});self.search_report=Some(r);},Err(e)=>self.status=e}
+ }
+ fn start_search(&mut self,id:i64,root:PathBuf,filter:crate::file_search::Filter)->Result<(),String>{
+  if self.search_job.is_some(){return Err("Search already running".into());}let scopes=self.scopes.clone();let cancel=std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));let flag=cancel.clone();let (tx,rx)=std::sync::mpsc::channel();
+  std::thread::Builder::new().name("hatoriel-file-search".into()).spawn(move||{let result=std::panic::catch_unwind(||crate::file_search::search(&scopes,&root,&filter,&flag)).unwrap_or_else(|_|Err("Search worker failed".into()));let _=tx.send(result);}).map_err(|e|e.to_string())?;
+  self.search_report=None;self.search_job=Some(SearchJob{id,cancel,rx});Ok(())
+ }
+ fn clear_view(&mut self){self.current=None;self.entries.clear();self.preview=None;self.search_pending=None;self.cancel_search();}
  fn request(&mut self,action:Action,target:PathBuf){match self.gate.propose(action,Some(target),Instant::now()){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}}
  pub fn panel(&mut self,ui:&mut egui::Ui,db:Option<&Connection>,busy:bool,en:bool,backend:&str,model:&str,bridge:bool){
   self.gate.expire(Instant::now());
@@ -91,9 +110,9 @@ impl Computer{
   ui.label(if en{"Local, manual requests only. No AI-generated commands, remote requests or file modifications. Only explicitly granted folders."}else{"Лише локальні ручні запити. Без команд від ШІ, віддалених дій або зміни файлів. Лише дозволені папки."});
   let mut enabled=self.gate.enabled;
   if ui.checkbox(&mut enabled,if en{"Enable actions for this session"}else{"Дозволити дії в поточному сеансі"}).changed(){self.gate.enable(enabled);if !enabled{self.scopes.clear();self.clear_view();}self.status=if enabled{"Session permission granted / Дозвіл надано".into()}else{"Permission revoked / Дозвіл відкликано".into()};}
-  if busy{self.gate.cancel();}
+  if busy{self.gate.cancel();self.search_pending=None;self.cancel_search();}
   if db.is_none(){ui.label("Action journal unavailable. Execution blocked / Журнал недоступний. Дії заблоковані.");self.gate.cancel();}
-  let can=self.gate.enabled&&!busy&&db.is_some()&&self.gate.pending.is_none();
+  let can=self.gate.enabled&&!busy&&db.is_some()&&self.gate.pending.is_none()&&self.search_job.is_none();
   for action in [Action::InspectStatus,Action::OpenData]{
    if ui.add_enabled(can&&(action!=Action::OpenData||cfg!(windows)),egui::Button::new(action.label(en))).clicked(){
     let target=match action{Action::InspectStatus=>Ok(None),Action::OpenData=>local_data().map(Some),_=>Err("Invalid quick action".into())};
@@ -101,14 +120,25 @@ impl Computer{
    }
   }
   ui.separator();ui.heading("Read-only folders / Дозволені папки");
-  ui.small("Session-only grants. No writes, no recursive scan, no automatic model access. / Дозволи лише на сеанс.");
+  ui.small("Session-only grants. No writes, bounded confirmed search, no automatic model access. / Дозволи лише на сеанс.");
   #[cfg(windows)]
   if ui.add_enabled(can&&self.scopes.roots().len()<crate::file_access::MAX_ROOTS,egui::Button::new("Choose folder / Обрати папку")).clicked(){
    if let Some(path)=rfd::FileDialog::new().pick_folder(){self.request(Action::GrantFolder,path);}
   }
+  ui.collapsing("Search filters / Фільтри пошуку",|ui|{
+   ui.add_enabled_ui(can,|ui|{
+    ui.label("Name contains / Назва");ui.text_edit_singleline(&mut self.filter.name);
+    ui.label("Extension / Розширення");ui.text_edit_singleline(&mut self.filter.extension);
+    ui.label("Text contains (optional) / Текст містить (необов’язково)");ui.text_edit_singleline(&mut self.filter.content);
+    ui.add(egui::DragValue::new(&mut self.filter.min_kib).range(0..=4_194_304).prefix("Min KiB: "));
+    ui.add(egui::DragValue::new(&mut self.filter.max_kib).range(0..=4_194_304).prefix("Max KiB (0 = any): "));
+    ui.add(egui::DragValue::new(&mut self.filter.recent_days).range(0..=3650).prefix("Modified within days (0 = any): "));
+   });
+  });
+  if self.search_job.is_some(){ui.horizontal(|ui|{ui.spinner();ui.label("Searching / Пошук…");if ui.button("Stop / Зупинити").clicked(){self.cancel_search();}});}
   let mut revoke=None;let mut request=None;
   for root in self.scopes.roots(){
-   ui.horizontal_wrapped(|ui|{ui.label(root.display().to_string());if ui.add_enabled(can,egui::Button::new("List / Вміст")).clicked(){request=Some((Action::ListFolder,root.clone()));}if ui.button("Revoke / Відкликати").clicked(){revoke=Some(root.clone());}});
+   ui.horizontal_wrapped(|ui|{ui.label(root.display().to_string());if ui.add_enabled(can,egui::Button::new("List / Вміст")).clicked(){request=Some((Action::ListFolder,root.clone()));}if ui.add_enabled(can,egui::Button::new("Search / Пошук")).clicked(){request=Some((Action::Search,root.clone()));}if ui.button("Revoke / Відкликати").clicked(){revoke=Some(root.clone());}});
   }
   if let Some(path)=revoke{self.gate.cancel();self.scopes.remove(&path);self.clear_view();request=None;self.status="Folder access revoked / Доступ відкликано".into();}
   if let Some(current)=&self.current{
@@ -121,26 +151,49 @@ impl Computer{
     });}
    });
   }
-  if let Some((action,target))=request{if self.gate.pending.is_none(){self.request(action,target);}}
+  if let Some(report)=&self.search_report{
+   ui.separator();ui.label(format!("{} files · {} scanned · {} skipped · {} text reads",report.hits.len(),report.scanned,report.skipped,report.text_reads));
+   if report.limited{ui.label("Partial search: a limit was reached / Неповний пошук: досягнуто ліміту.");}
+   egui::ScrollArea::vertical().id_salt("search-results").max_height(220.).show(ui,|ui|{
+    for hit in &report.hits{ui.push_id(&hit.path,|ui|{
+     ui.label(hit.path.display().to_string());ui.small(format!("{} bytes · modified UTC epoch: {}",hit.bytes,hit.modified.map(|x|x.to_string()).unwrap_or_else(||"unknown".into())));
+     ui.horizontal(|ui|{
+      if ui.add_enabled(can,egui::Button::new("Preview text / Текст")).clicked(){request=Some((Action::ReadText,hit.path.clone()));}
+      if let Some(parent)=hit.path.parent(){if ui.add_enabled(can,egui::Button::new("Parent folder / Папка")).clicked(){request=Some((Action::ListFolder,parent.to_path_buf()));}}
+     });
+    });}
+   });
+  }
+  if let Some((action,target))=request{if self.gate.pending.is_none(){
+   if action==Action::Search{match self.filter.validate(){Ok(())=>{self.search_pending=Some(self.filter.clone());self.request(action,target);},Err(e)=>self.status=e}}
+   else{self.search_pending=None;self.request(action,target);}
+  }}
   if let Some((path,text))=&self.preview{ui.label(path.display().to_string());egui::ScrollArea::vertical().id_salt("computer-file-preview").max_height(180.).show(ui,|ui|{ui.label(text);});if ui.button("Close preview / Закрити").clicked(){self.preview=None;}}
   if let Some(p)=self.gate.pending.as_ref(){
    ui.separator();ui.label(egui::RichText::new("REVIEW / ПІДТВЕРДЖЕННЯ").color(crate::crimson::RED).strong());
    ui.label(p.action.label(en));
-   if let Some(path)=&p.target{ui.label(path.display().to_string());ui.small(match p.action{Action::OpenData=>"Opens Explorer, no content read.",Action::GrantFolder=>"Grants read-only access for this session, not automatic scanning.",Action::ListFolder=>"Lists at most 200 immediate entries, no recursion.",Action::ReadText=>"Reads at most 64 KiB of supported plain text, displayed locally.",_=>""});}
+   if let Some(path)=&p.target{ui.label(path.display().to_string());ui.small(match p.action{Action::OpenData=>"Opens Explorer, no content read.",Action::GrantFolder=>"Grants read-only access for this session, not automatic scanning.",Action::ListFolder=>"Lists at most 200 immediate entries, no recursion.",Action::ReadText=>"Reads at most 64 KiB of supported plain text, displayed locally.",Action::Search=>"Recursive scan: up to 4000 entries, 200 results, 64 text reads, cooperative 5s limit. No upload.",_=>""});}
    else{ui.small("Displays current backend, selected model, app storage mode and bridge state. / Лише стан застосунку.");}
+   if p.action==Action::Search{if let Some(f)=&self.search_pending{ui.label(format!("Name: {:?} · Extension: {:?} · Content: {:?} · size {}–{} KiB (0 max = any) · recent {} days",f.name,f.extension,f.content,f.min_kib,f.max_kib,f.recent_days));}}
    ui.small(format!("{} s · one-time approval",TTL.saturating_sub(p.created.elapsed()).as_secs()));
    let mut approve=false;let mut cancel=false;
    ui.horizontal(|ui|{
     approve=ui.add_enabled(!busy&&self.gate.enabled&&db.is_some(),egui::Button::new("Confirm once / Підтвердити один раз")).clicked();
     cancel=ui.button("Cancel / Скасувати").clicked();
    });
-   if cancel{self.gate.cancel();self.status="Cancelled / Скасовано".into();}
+   if cancel{self.gate.cancel();self.search_pending=None;self.status="Cancelled / Скасовано".into();}
    else if approve{
     match self.gate.approve(Instant::now()){
      Ok(p)=>if let Some(db)=db{
       match begin(db,p.action){
        Ok(id)=>{
+        if p.action==Action::Search{
+         let result=match (p.target,self.search_pending.take()){(Some(root),Some(filter))=>self.start_search(id,root,filter),_=>Err("Missing approved search parameters".into())};
+         match result{Ok(())=>self.status="Search started / Пошук розпочато".into(),Err(e)=>{self.status=e;if finish(db,id,"failed").is_err(){self.gate.enable(false);self.scopes.clear();self.clear_view();}}}
+         return;
+        }
         let result=match p.action{
+         Action::Search=>Err("Search dispatch error".into()),
          Action::InspectStatus=>Ok(format!("Backend: {backend}\nModel: {model}\nStorage: {}\nBridge: {}",if crate::storage::portable(){"portable"}else{"installed"},if bridge{"running"}else{"stopped"})),
          Action::OpenData=>p.target.as_deref().ok_or_else(||"Missing approved target".to_string()).and_then(open_data),
          Action::GrantFolder=>p.target.as_deref().ok_or_else(||"Missing folder".to_string()).and_then(|path|self.scopes.grant(path)).map(|_|"Read-only grant added / Дозвіл надано".into()),
