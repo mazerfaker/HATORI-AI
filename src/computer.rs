@@ -5,7 +5,7 @@ use rusqlite::{Connection,params};
 const TTL:Duration=Duration::from_secs(60);
 const MAX_AUDIT:usize=200;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText,Search,OfferFile,RegisterApp,LaunchApp,CaptureScreen,ReadClipboardText,ReadClipboardImage,WriteClipboardText}
+pub(crate) enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText,Search,OfferFile,RegisterApp,LaunchApp,CaptureScreen,ReadClipboardText,ReadClipboardImage,WriteClipboardText}
 impl Action{
  fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data",Self::GrantFolder=>"grant_folder",Self::ListFolder=>"list_folder",Self::ReadText=>"read_text",Self::Search=>"search_files",Self::OfferFile=>"offer_file",Self::RegisterApp=>"register_app",Self::LaunchApp=>"launch_app",Self::CaptureScreen=>"capture_screen",Self::ReadClipboardText=>"clipboard_read_text",Self::ReadClipboardImage=>"clipboard_read_image",Self::WriteClipboardText=>"clipboard_write_text"}}
  fn label(self,en:bool)->&'static str{match (self,en){
@@ -92,17 +92,18 @@ struct SearchJob{
  rx:std::sync::mpsc::Receiver<Result<crate::file_search::Report,String>>,
 }
 #[derive(Default)]
-pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>,filter:crate::file_search::Filter,search_pending:Option<crate::file_search::Filter>,search_job:Option<SearchJob>,search_report:Option<crate::file_search::Report>,apps:crate::app_control::Catalog,screen:Option<crate::screen_awareness::Snapshot>,screen_attach:bool,clipboard:Option<crate::clipboard_intelligence::Snapshot>,clipboard_attach:bool,clipboard_write:String,clipboard_pending:Option<String>}
+pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>,filter:crate::file_search::Filter,search_pending:Option<crate::file_search::Filter>,search_job:Option<SearchJob>,search_report:Option<crate::file_search::Report>,apps:crate::app_control::Catalog,screen:Option<crate::screen_awareness::Snapshot>,screen_attach:bool,clipboard:Option<crate::clipboard_intelligence::Snapshot>,clipboard_attach:bool,clipboard_write:String,clipboard_pending:Option<String>,workflow:crate::desktop_automation::Workflow}
 impl Computer{
- pub fn leave(&mut self){self.clear_clipboard();self.screen=None;self.screen_attach=false;self.gate.cancel();self.preview=None;self.search_pending=None;self.cancel_search();}
+ pub fn leave(&mut self){self.workflow.stop("Workflow cleared on leaving page or losing focus / План очищено");self.clear_clipboard();self.screen=None;self.screen_attach=false;self.gate.cancel();self.preview=None;self.search_pending=None;self.cancel_search();}
  fn cancel_search(&mut self){if let Some(j)=&self.search_job{j.cancel.store(true,std::sync::atomic::Ordering::Relaxed);}self.search_report=None;}
- pub fn poll(&mut self,db:Option<&Connection>){
+ pub fn poll(&mut self,db:Option<&Connection>,transfers:&crate::file_transfer::Store){
   self.apps.poll();
   let result=match self.search_job.as_ref().map(|j|j.rx.try_recv()){Some(Ok(r))=>r,Some(Err(std::sync::mpsc::TryRecvError::Disconnected))=>Err("Search worker disconnected".into()),_=>return};
   let job=self.search_job.take().unwrap();let cancelled=job.cancel.load(std::sync::atomic::Ordering::Relaxed)||result.as_ref().is_ok_and(|r|r.cancelled);
   let outcome=if cancelled{"cancelled"}else if result.is_ok(){"completed"}else{"failed"};
-  if db.is_none_or(|d|finish(d,job.id,outcome).is_err()){self.status="Search audit completion failed; permissions revoked".into();self.gate.enable(false);self.scopes.clear();self.apps.clear();self.clear_view();return;}
-  if cancelled{self.status="Search cancelled / Пошук скасовано".into();return;}
+  if db.is_none_or(|d|finish(d,job.id,outcome).is_err()){self.status="Search audit completion failed; permissions revoked".into();transfers.clear();self.gate.enable(false);self.scopes.clear();self.apps.clear();self.clear_view();return;}
+  if cancelled{self.workflow.complete(false);self.status="Search cancelled / Пошук скасовано".into();return;}
+  self.workflow.complete(result.is_ok());
   match result{Ok(r)=>{self.status=format!("{} matches · {} scanned · {} text reads{}",r.hits.len(),r.scanned,r.text_reads,if r.limited{" · partial results"}else{""});self.search_report=Some(r);},Err(e)=>self.status=e}
  }
  fn start_search(&mut self,id:i64,root:PathBuf,filter:crate::file_search::Filter)->Result<(),String>{
@@ -114,7 +115,7 @@ impl Computer{
  pub fn screen_feedback(&mut self,message:String){self.status=message;}
  fn clear_clipboard(&mut self){self.clipboard=None;self.clipboard_attach=false;self.clipboard_write.clear();self.clipboard_pending=None;}
  pub fn clipboard_for_chat(&mut self)->Option<(&'static str,Vec<u8>,bool)>{if !std::mem::take(&mut self.clipboard_attach){return None;}self.clipboard.as_ref().map(|s|{let (n,b)=s.attachment();(n,b,s.is_image())})}
- fn clear_view(&mut self){self.clear_clipboard();self.screen=None;self.screen_attach=false;self.current=None;self.entries.clear();self.preview=None;self.search_pending=None;self.cancel_search();}
+ fn clear_view(&mut self){self.workflow.stop("Workflow cleared / План очищено");self.clear_clipboard();self.screen=None;self.screen_attach=false;self.current=None;self.entries.clear();self.preview=None;self.search_pending=None;self.cancel_search();}
  fn request(&mut self,action:Action,target:PathBuf){match self.gate.propose(action,Some(target),Instant::now()){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}}
  pub fn panel(&mut self,ui:&mut egui::Ui,db:Option<&Connection>,busy:bool,en:bool,backend:&str,model:&str,bridge:bool,transfers:&crate::file_transfer::Store){
   self.gate.expire(Instant::now());
@@ -123,10 +124,44 @@ impl Computer{
   ui.label(if en{"Local, manual requests only. No AI-generated commands, remote requests or file modifications. Only explicitly granted folders."}else{"Лише локальні ручні запити. Без команд від ШІ, віддалених дій або зміни файлів. Лише дозволені папки."});
   let mut enabled=self.gate.enabled;
   if ui.checkbox(&mut enabled,if en{"Enable actions for this session"}else{"Дозволити дії в поточному сеансі"}).changed(){self.gate.enable(enabled);if !enabled{transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}self.status=if enabled{"Session permission granted / Дозвіл надано".into()}else{"Permission revoked / Дозвіл відкликано".into()};}
-  if busy{self.clear_clipboard();self.screen=None;self.screen_attach=false;self.gate.cancel();self.search_pending=None;self.cancel_search();}
+  if busy{self.workflow.stop("Workflow stopped: chat busy / Чат зайнятий");self.clear_clipboard();self.screen=None;self.screen_attach=false;self.gate.cancel();self.search_pending=None;self.cancel_search();}
   if !bridge||!self.gate.enabled{transfers.clear();}
-  if db.is_none(){self.clear_clipboard();self.screen=None;self.screen_attach=false;transfers.clear();ui.label("Action journal unavailable. Execution blocked / Журнал недоступний. Дії заблоковані.");self.gate.cancel();}
-  let can=self.gate.enabled&&!busy&&db.is_some()&&self.gate.pending.is_none()&&self.search_job.is_none();
+  if db.is_none(){self.workflow.stop("Workflow blocked: audit unavailable");self.clear_clipboard();self.screen=None;self.screen_attach=false;transfers.clear();ui.label("Action journal unavailable. Execution blocked / Журнал недоступний. Дії заблоковані.");self.gate.cancel();}
+  if self.workflow.active(){
+   if !self.gate.enabled||busy||db.is_none(){self.workflow.stop("Permission unavailable");self.gate.cancel();}
+   else if self.workflow.awaiting()&&self.gate.pending.is_none()&&self.search_job.is_none(){self.workflow.stop("Step expired or cancelled / Крок скасовано");}
+   else if self.gate.pending.is_none()&&self.search_job.is_none(){
+    if let Some(step)=self.workflow.next(){
+     match self.gate.propose(step.action,step.target,Instant::now()){
+      Ok(())=>{self.search_pending=step.filter;self.clipboard_pending=step.text;self.status="Review workflow step / Підтверди крок плану".into();},
+      Err(e)=>{self.workflow.stop(&e);self.status=e;}
+     }
+    }
+   }
+  }
+  let can=self.gate.enabled&&!busy&&db.is_some()&&self.gate.pending.is_none()&&self.search_job.is_none()&&!self.workflow.active();
+  ui.separator();ui.heading("Desktop automation / Послідовність дій");
+  ui.small("Build a plan by selecting an action and choosing Add to workflow in its review. Up to eight steps, each confirmed separately. No background execution or rollback.");
+  let (done,total)=self.workflow.progress();
+  if self.workflow.active(){ui.add(egui::ProgressBar::new(done as f32/total.max(1) as f32).text(format!("{done}/{total}")));ui.label("Confirm the pending step in REVIEW below / Підтверди поточний крок нижче.");}
+  let mut edit=None;
+  for (i,step) in self.workflow.steps().iter().enumerate(){
+   ui.push_id(("workflow-step",i),|ui|{
+    ui.label(format!("{}. {}",i+1,step.action.label(en)));
+    if let Some(path)=&step.target{ui.small(path.display().to_string());}
+    if let Some(f)=&step.filter{ui.small(format!("Name: {:?} · Extension: {:?} · Content: {:?} · {}–{} KiB · {} days",f.name,f.extension,f.content,f.min_kib,f.max_kib,f.recent_days));}
+    if let Some(text)=&step.text{ui.collapsing("Exact clipboard replacement / Точний текст",|ui|{egui::ScrollArea::vertical().id_salt("workflow-text").max_height(110.).show(ui,|ui|{ui.label(text);});});}
+    if !self.workflow.active(){ui.horizontal(|ui|{if ui.add_enabled(can&&i>0,egui::Button::new("↑")).clicked(){edit=Some((i,true));}if ui.add_enabled(can,egui::Button::new("Remove / Видалити")).clicked(){edit=Some((i,false));}});}
+   });
+  }
+  if let Some((i,up))=edit{if up{self.workflow.up(i);}else{self.workflow.remove(i);}}
+  ui.horizontal(|ui|{
+   if ui.add_enabled(can&&!self.workflow.steps().is_empty(),egui::Button::new("Start reviewed plan / Почати план")).clicked(){if let Err(e)=self.workflow.start(){self.status=e;}}
+   if !self.workflow.steps().is_empty()&&ui.button("Stop & clear / Зупинити й очистити").clicked(){let active=self.workflow.active();self.workflow.stop("Workflow cancelled / План скасовано");if active{self.gate.cancel();self.search_pending=None;self.clipboard_pending=None;self.cancel_search();}}
+  });
+  if !self.workflow.status.is_empty(){ui.label(&self.workflow.status);}
+  // Recompute after start/stop; ordinary actions cannot interfere with a running plan.
+  let can=self.gate.enabled&&!busy&&db.is_some()&&self.gate.pending.is_none()&&self.search_job.is_none()&&!self.workflow.active();
   for action in [Action::InspectStatus,Action::OpenData]{
    if ui.add_enabled(can&&(action!=Action::OpenData||cfg!(windows)),egui::Button::new(action.label(en))).clicked(){
     let target=match action{Action::InspectStatus=>Ok(None),Action::OpenData=>local_data().map(Some),_=>Err("Invalid quick action".into())};
@@ -205,7 +240,7 @@ impl Computer{
     });
    });
   }
-  if let Some(path)=app_revoke{self.gate.cancel();self.apps.revoke(&path);app_request=None;self.status="App permission revoked; running process unaffected / Дозвіл відкликано".into();}
+  if let Some(path)=app_revoke{self.workflow.stop("App permission revoked / Дозвіл відкликано");self.gate.cancel();self.apps.revoke(&path);app_request=None;self.status="App permission revoked; running process unaffected / Дозвіл відкликано".into();}
   if let Some(path)=app_request{if self.gate.pending.is_none(){self.request(Action::LaunchApp,path);}}
   ui.separator();ui.heading("File transfer / Передавання файлів");
   ui.small("One original file up to 8 MiB. Start the trusted HTTPS bridge in Devices first. Any client with the session key AND code can redeem once.");
@@ -226,7 +261,7 @@ impl Computer{
     ui.add(egui::DragValue::new(&mut self.filter.recent_days).range(0..=3650).prefix("Modified within days (0 = any): "));
    });
   });
-  if self.search_job.is_some(){ui.horizontal(|ui|{ui.spinner();ui.label("Searching / Пошук…");if ui.button("Stop / Зупинити").clicked(){self.cancel_search();}});}
+  if self.search_job.is_some(){ui.horizontal(|ui|{ui.spinner();ui.label("Searching / Пошук…");if ui.button("Stop / Зупинити").clicked(){self.workflow.stop("Workflow search cancelled / Пошук скасовано");self.cancel_search();}});}
   let mut revoke=None;let mut request=None;
   for root in self.scopes.roots(){
    ui.horizontal_wrapped(|ui|{ui.label(root.display().to_string());if ui.add_enabled(can,egui::Button::new("List / Вміст")).clicked(){request=Some((Action::ListFolder,root.clone()));}if ui.add_enabled(can,egui::Button::new("Search / Пошук")).clicked(){request=Some((Action::Search,root.clone()));}if ui.button("Revoke / Відкликати").clicked(){revoke=Some(root.clone());}});
@@ -272,12 +307,15 @@ impl Computer{
    else{ui.small("Displays current backend, selected model, app storage mode and bridge state. / Лише стан застосунку.");}
    if p.action==Action::Search{if let Some(f)=&self.search_pending{ui.label(format!("Name: {:?} · Extension: {:?} · Content: {:?} · size {}–{} KiB (0 max = any) · recent {} days",f.name,f.extension,f.content,f.min_kib,f.max_kib,f.recent_days));}}
    ui.small(format!("{} s · one-time approval",TTL.saturating_sub(p.created.elapsed()).as_secs()));
-   let mut approve=false;let mut cancel=false;
+   let mut approve=false;let mut cancel=false;let mut queue=false;
+   let step=crate::desktop_automation::Step::new(p.action,p.target.clone(),if p.action==Action::Search{self.search_pending.clone()}else{None},if p.action==Action::WriteClipboardText{self.clipboard_pending.clone()}else{None});
    ui.horizontal(|ui|{
     approve=ui.add_enabled(!busy&&self.gate.enabled&&db.is_some()&&(p.action!=Action::OfferFile||bridge),egui::Button::new("Confirm once / Підтвердити один раз")).clicked();
     cancel=ui.button("Cancel / Скасувати").clicked();
+    if !self.workflow.active(){queue=ui.add_enabled(!busy&&self.gate.enabled&&db.is_some()&&step.is_ok()&&self.workflow.steps().len()<crate::desktop_automation::MAX_STEPS,egui::Button::new("Add to workflow / Додати до плану")).clicked();}
    });
-   if cancel{self.gate.cancel();self.clipboard_pending=None;self.search_pending=None;self.status="Cancelled / Скасовано".into();}
+   if cancel{self.workflow.stop("Step cancelled / Крок скасовано");self.gate.cancel();self.clipboard_pending=None;self.search_pending=None;self.status="Cancelled / Скасовано".into();}
+   else if queue{match step.and_then(|s|self.workflow.add(s)){Ok(())=>{self.gate.cancel();self.clipboard_pending=None;self.search_pending=None;self.status="Step added without execution / Крок додано без виконання".into();},Err(e)=>self.status=e}}
    else if approve{
     match self.gate.approve(Instant::now()){
      Ok(p)=>if let Some(db)=db{
@@ -285,7 +323,7 @@ impl Computer{
        Ok(id)=>{
         if p.action==Action::Search{
          let result=match (p.target,self.search_pending.take()){(Some(root),Some(filter))=>self.start_search(id,root,filter),_=>Err("Missing approved search parameters".into())};
-         match result{Ok(())=>self.status="Search started / Пошук розпочато".into(),Err(e)=>{self.status=e;if finish(db,id,"failed").is_err(){self.gate.enable(false);transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}}}
+         match result{Ok(())=>self.status="Search started / Пошук розпочато".into(),Err(e)=>{self.workflow.complete(false);self.status=e;if finish(db,id,"failed").is_err(){self.gate.enable(false);transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}}}
          return;
         }
         let result=match p.action{
@@ -303,13 +341,14 @@ impl Computer{
          Action::ListFolder=>p.target.as_deref().ok_or_else(||"Missing folder".to_string()).and_then(|path|self.scopes.list(path)).map(|(entries,capped)|{self.current=p.target.clone();self.preview=None;let n=entries.len();self.entries=entries;format!("{n} entries{}",if capped{" · capped at 200 scanned entries"}else{""})}),
          Action::ReadText=>p.target.as_deref().ok_or_else(||"Missing file".to_string()).and_then(|path|self.scopes.read_text(path)).map(|text|{self.preview=p.target.clone().map(|path|(path,text));"Local text preview / Локальне прев’ю".into()}),
         };
-        let outcome=if result.is_ok(){if matches!(p.action,Action::OpenData|Action::LaunchApp){"launch_requested"}else if p.action==Action::OfferFile{"offer_created"}else{"completed"}}else{"failed"};
+        let ok=result.is_ok();
+        let outcome=if ok{if matches!(p.action,Action::OpenData|Action::LaunchApp){"launch_requested"}else if p.action==Action::OfferFile{"offer_created"}else{"completed"}}else{"failed"};
         self.status=match result{Ok(s)=>s,Err(e)=>format!("Action failed: {e}")};
-        if finish(db,id,outcome).is_err(){self.status.push_str("\nAudit completion write failed; initial approval remains recorded.");self.gate.enable(false);transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}
+        if finish(db,id,outcome).is_err(){self.status.push_str("\nAudit completion write failed; initial approval remains recorded.");self.gate.enable(false);transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}else{self.workflow.complete(ok);}
        },Err(e)=>{self.status=format!("Action blocked: audit write failed: {e}");transfers.clear();self.gate.enable(false);self.scopes.clear();self.apps.clear();self.clear_view();}
       }
      },
-     Err(e)=>self.status=e,
+     Err(e)=>{self.workflow.stop("Step approval failed / Підтвердження не вдалося");self.status=e},
     }
    }
   }
