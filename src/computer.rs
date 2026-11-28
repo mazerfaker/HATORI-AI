@@ -5,9 +5,9 @@ use rusqlite::{Connection,params};
 const TTL:Duration=Duration::from_secs(60);
 const MAX_AUDIT:usize=200;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText,Search,OfferFile}
+enum Action{InspectStatus,OpenData,GrantFolder,ListFolder,ReadText,Search,OfferFile,RegisterApp,LaunchApp}
 impl Action{
- fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data",Self::GrantFolder=>"grant_folder",Self::ListFolder=>"list_folder",Self::ReadText=>"read_text",Self::Search=>"search_files",Self::OfferFile=>"offer_file"}}
+ fn key(self)->&'static str{match self{Self::InspectStatus=>"inspect_status",Self::OpenData=>"open_app_data",Self::GrantFolder=>"grant_folder",Self::ListFolder=>"list_folder",Self::ReadText=>"read_text",Self::Search=>"search_files",Self::OfferFile=>"offer_file",Self::RegisterApp=>"register_app",Self::LaunchApp=>"launch_app"}}
  fn label(self,en:bool)->&'static str{match (self,en){
   (Self::InspectStatus,true)=>"Inspect local application status",
   (Self::InspectStatus,false)=>"Переглянути локальний стан застосунку",
@@ -18,6 +18,8 @@ impl Action{
   (Self::ReadText,true)=>"Preview local text file", (Self::ReadText,false)=>"Прочитати текстовий файл",
   (Self::Search,true)=>"Search granted folder",(Self::Search,false)=>"Знайти файли в дозволеній папці",
   (Self::OfferFile,true)=>"Prepare original file for phone",(Self::OfferFile,false)=>"Підготувати оригінал для смартфона",
+  (Self::RegisterApp,true)=>"Approve executable for this session",(Self::RegisterApp,false)=>"Дозволити програму на цей сеанс",
+  (Self::LaunchApp,true)=>"Launch approved application",(Self::LaunchApp,false)=>"Запустити дозволену програму",
  }}
 }
 #[derive(Clone,Debug)]
@@ -86,15 +88,16 @@ struct SearchJob{
  rx:std::sync::mpsc::Receiver<Result<crate::file_search::Report,String>>,
 }
 #[derive(Default)]
-pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>,filter:crate::file_search::Filter,search_pending:Option<crate::file_search::Filter>,search_job:Option<SearchJob>,search_report:Option<crate::file_search::Report>}
+pub struct Computer{gate:Gate,status:String,scopes:crate::file_access::Scopes,current:Option<PathBuf>,entries:Vec<crate::file_access::Entry>,preview:Option<(PathBuf,String)>,filter:crate::file_search::Filter,search_pending:Option<crate::file_search::Filter>,search_job:Option<SearchJob>,search_report:Option<crate::file_search::Report>,apps:crate::app_control::Catalog}
 impl Computer{
  pub fn leave(&mut self){self.gate.cancel();self.preview=None;self.search_pending=None;self.cancel_search();}
  fn cancel_search(&mut self){if let Some(j)=&self.search_job{j.cancel.store(true,std::sync::atomic::Ordering::Relaxed);}self.search_report=None;}
  pub fn poll(&mut self,db:Option<&Connection>){
+  self.apps.poll();
   let result=match self.search_job.as_ref().map(|j|j.rx.try_recv()){Some(Ok(r))=>r,Some(Err(std::sync::mpsc::TryRecvError::Disconnected))=>Err("Search worker disconnected".into()),_=>return};
   let job=self.search_job.take().unwrap();let cancelled=job.cancel.load(std::sync::atomic::Ordering::Relaxed)||result.as_ref().is_ok_and(|r|r.cancelled);
   let outcome=if cancelled{"cancelled"}else if result.is_ok(){"completed"}else{"failed"};
-  if db.is_none_or(|d|finish(d,job.id,outcome).is_err()){self.status="Search audit completion failed; permissions revoked".into();self.gate.enable(false);self.scopes.clear();self.clear_view();return;}
+  if db.is_none_or(|d|finish(d,job.id,outcome).is_err()){self.status="Search audit completion failed; permissions revoked".into();self.gate.enable(false);self.scopes.clear();self.apps.clear();self.clear_view();return;}
   if cancelled{self.status="Search cancelled / Пошук скасовано".into();return;}
   match result{Ok(r)=>{self.status=format!("{} matches · {} scanned · {} text reads{}",r.hits.len(),r.scanned,r.text_reads,if r.limited{" · partial results"}else{""});self.search_report=Some(r);},Err(e)=>self.status=e}
  }
@@ -110,7 +113,7 @@ impl Computer{
   ui.heading(if en{"Computer interaction · File Access"}else{"Взаємодія з комп’ютером · File Access"});
   ui.label(if en{"Local, manual requests only. No AI-generated commands, remote requests or file modifications. Only explicitly granted folders."}else{"Лише локальні ручні запити. Без команд від ШІ, віддалених дій або зміни файлів. Лише дозволені папки."});
   let mut enabled=self.gate.enabled;
-  if ui.checkbox(&mut enabled,if en{"Enable actions for this session"}else{"Дозволити дії в поточному сеансі"}).changed(){self.gate.enable(enabled);if !enabled{transfers.clear();self.scopes.clear();self.clear_view();}self.status=if enabled{"Session permission granted / Дозвіл надано".into()}else{"Permission revoked / Дозвіл відкликано".into()};}
+  if ui.checkbox(&mut enabled,if en{"Enable actions for this session"}else{"Дозволити дії в поточному сеансі"}).changed(){self.gate.enable(enabled);if !enabled{transfers.clear();self.scopes.clear();self.apps.clear();self.clear_view();}self.status=if enabled{"Session permission granted / Дозвіл надано".into()}else{"Permission revoked / Дозвіл відкликано".into()};}
   if busy{self.gate.cancel();self.search_pending=None;self.cancel_search();}
   if !bridge||!self.gate.enabled{transfers.clear();}
   if db.is_none(){transfers.clear();ui.label("Action journal unavailable. Execution blocked / Журнал недоступний. Дії заблоковані.");self.gate.cancel();}
@@ -121,6 +124,27 @@ impl Computer{
     match target.and_then(|t|self.gate.propose(action,t,Instant::now())){Ok(())=>self.status="Review required / Потрібне підтвердження".into(),Err(e)=>self.status=e}
    }
   }
+  ui.separator();ui.heading("Application control / Керування програмами");
+  ui.small("Trusted EXE only, no arguments or shell. Approval is session-only. Programs run with your account's permissions; revoke does not close existing processes.");
+  ui.label(format!("{} tracked processes / Відстежувані процеси",self.apps.running_count()));
+  #[cfg(windows)]
+  if ui.add_enabled(can&&self.apps.entries().len()<crate::app_control::MAX_APPS,egui::Button::new("Choose EXE / Обрати програму")).clicked(){
+   if let Some(path)=rfd::FileDialog::new().add_filter("Windows EXE",&["exe"]).pick_file(){self.request(Action::RegisterApp,path);}
+  }
+  let mut app_request=None;let mut app_revoke=None;
+  for app in self.apps.entries(){
+   ui.push_id(&app.path,|ui|{
+    ui.label(&app.name);ui.small(app.path.display().to_string());
+    ui.horizontal(|ui|{
+     let running=self.apps.is_running(&app.path);
+     if ui.add_enabled(can&&!running&&cfg!(windows),egui::Button::new("Launch / Запустити")).clicked(){app_request=Some(app.path.clone());}
+     if running{ui.small("Tracked process running");}
+     if ui.button("Revoke / Відкликати").clicked(){app_revoke=Some(app.path.clone());}
+    });
+   });
+  }
+  if let Some(path)=app_revoke{self.gate.cancel();self.apps.revoke(&path);app_request=None;self.status="App permission revoked; running process unaffected / Дозвіл відкликано".into();}
+  if let Some(path)=app_request{if self.gate.pending.is_none(){self.request(Action::LaunchApp,path);}}
   ui.separator();ui.heading("File transfer / Передавання файлів");
   ui.small("One original file up to 8 MiB. Start the trusted HTTPS bridge in Devices first. Any client with the session key AND code can redeem once.");
   if let Some((code,name,size,seconds))=transfers.info(){ui.label(format!("{name} · {size} bytes · {seconds}s"));ui.monospace(&code);if ui.button("Copy one-time code / Копіювати код").clicked(){ui.ctx().copy_text(code);}if ui.button("Revoke transfer / Скасувати передавання").clicked(){transfers.clear();}}
@@ -179,7 +203,7 @@ impl Computer{
   if let Some(p)=self.gate.pending.as_ref(){
    ui.separator();ui.label(egui::RichText::new("REVIEW / ПІДТВЕРДЖЕННЯ").color(crate::crimson::RED).strong());
    ui.label(p.action.label(en));
-   if let Some(path)=&p.target{ui.label(path.display().to_string());ui.small(match p.action{Action::OpenData=>"Opens Explorer, no content read.",Action::GrantFolder=>"Grants read-only access for this session, not automatic scanning.",Action::ListFolder=>"Lists at most 200 immediate entries, no recursion.",Action::ReadText=>"Reads at most 64 KiB of supported plain text, displayed locally.",Action::Search=>"Recursive scan: up to 4000 entries, 200 results, 64 text reads, cooperative 5s limit. No upload.",Action::OfferFile=>"Creates a memory-only copy of the original file for one authenticated HTTPS download within 120 seconds. Not bound to one device; protect both codes.",_=>""});}
+   if let Some(path)=&p.target{ui.label(path.display().to_string());ui.small(match p.action{Action::OpenData=>"Opens Explorer, no content read.",Action::GrantFolder=>"Grants read-only access for this session, not automatic scanning.",Action::ListFolder=>"Lists at most 200 immediate entries, no recursion.",Action::ReadText=>"Reads at most 64 KiB of supported plain text, displayed locally.",Action::Search=>"Recursive scan: up to 4000 entries, 200 results, 64 text reads, cooperative 5s limit. No upload.",Action::OfferFile=>"Creates a memory-only copy of the original file for one authenticated HTTPS download within 120 seconds. Not bound to one device; protect both codes.",Action::RegisterApp=>"Trust this specific executable for this session. Its SHA-256 will be recorded in memory; only choose software you trust.",Action::LaunchApp=>"Launch this executable without arguments. It runs with your user permissions and can act independently. No sandbox or elevation request.",_=>""});}
    else{ui.small("Displays current backend, selected model, app storage mode and bridge state. / Лише стан застосунку.");}
    if p.action==Action::Search{if let Some(f)=&self.search_pending{ui.label(format!("Name: {:?} · Extension: {:?} · Content: {:?} · size {}–{} KiB (0 max = any) · recent {} days",f.name,f.extension,f.content,f.min_kib,f.max_kib,f.recent_days));}}
    ui.small(format!("{} s · one-time approval",TTL.saturating_sub(p.created.elapsed()).as_secs()));
@@ -201,6 +225,8 @@ impl Computer{
         }
         let result=match p.action{
          Action::Search=>Err("Search dispatch error".into()),
+         Action::RegisterApp=>p.target.as_deref().ok_or_else(||"Missing executable".to_string()).and_then(|path|self.apps.register(path)).map(|_|"Executable approved for this session / Програму дозволено".into()),
+         Action::LaunchApp=>p.target.as_deref().ok_or_else(||"Missing executable".to_string()).and_then(|path|self.apps.launch(path)).map(|pid|format!("Launch requested · PID {pid} / Запуск запитано")),
          Action::OfferFile=>if !bridge{Err("Bridge stopped".into())}else{p.target.as_deref().ok_or_else(||"Missing file".to_string()).and_then(|path|transfers.prepare(&self.scopes,path)).map(|_|"File prepared; enter one-time code on phone / Файл підготовлено".into())},
          Action::InspectStatus=>Ok(format!("Backend: {backend}\nModel: {model}\nStorage: {}\nBridge: {}",if crate::storage::portable(){"portable"}else{"installed"},if bridge{"running"}else{"stopped"})),
          Action::OpenData=>p.target.as_deref().ok_or_else(||"Missing approved target".to_string()).and_then(open_data),
@@ -208,7 +234,7 @@ impl Computer{
          Action::ListFolder=>p.target.as_deref().ok_or_else(||"Missing folder".to_string()).and_then(|path|self.scopes.list(path)).map(|(entries,capped)|{self.current=p.target.clone();self.preview=None;let n=entries.len();self.entries=entries;format!("{n} entries{}",if capped{" · capped at 200 scanned entries"}else{""})}),
          Action::ReadText=>p.target.as_deref().ok_or_else(||"Missing file".to_string()).and_then(|path|self.scopes.read_text(path)).map(|text|{self.preview=p.target.clone().map(|path|(path,text));"Local text preview / Локальне прев’ю".into()}),
         };
-        let outcome=if result.is_ok(){if p.action==Action::OpenData{"launch_requested"}else if p.action==Action::OfferFile{"offer_created"}else{"completed"}}else{"failed"};
+        let outcome=if result.is_ok(){if matches!(p.action,Action::OpenData|Action::LaunchApp){"launch_requested"}else if p.action==Action::OfferFile{"offer_created"}else{"completed"}}else{"failed"};
         self.status=match result{Ok(s)=>s,Err(e)=>format!("Action failed: {e}")};
         if finish(db,id,outcome).is_err(){self.status.push_str("\nAudit completion write failed; initial approval remains recorded.");self.gate.enable(false);transfers.clear();self.scopes.clear();self.clear_view();}
        },Err(e)=>{self.status=format!("Action blocked: audit write failed: {e}");transfers.clear();self.gate.enable(false);self.scopes.clear();self.clear_view();}

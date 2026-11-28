@@ -21,6 +21,7 @@ mod computer;
 mod file_access;
 mod file_search;
 mod file_transfer;
+mod app_control;
 use hatori_ai::{core, memory_suggest, proactive, emotion, adaptive, memory_core, model_manager, inference::{Backend, Ollama, Message}, llama_backend::Llama};
 use serde::{Serialize, Deserialize};
 use std::{sync::mpsc, time::Duration};

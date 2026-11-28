@@ -23,7 +23,7 @@ fn drive_path(path:&Path)->bool{
  }
  #[cfg(not(windows))]{path.is_absolute()}
 }
-fn inspect_chain(path:&Path)->Result<(),String>{
+pub(crate) fn inspect_chain(path:&Path)->Result<(),String>{
  if !drive_path(path){return Err("Only local absolute paths are supported".into());}
  let mut current=PathBuf::new();let mut depth=0;
  for part in path.components(){
